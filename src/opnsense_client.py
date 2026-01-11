@@ -45,22 +45,47 @@ class OPNsenseClient:
             raise
 
     def get_firewall_rules(self) -> List[Dict]:
-        """Get all firewall rules"""
+        """Get all firewall rules from automation API"""
         try:
-            result = self._make_request("GET", "/firewall/filter/searchRule")
+            # Use POST for search endpoints per OPNsense API docs
+            result = self._make_request("POST", "/firewall/filter/search_rule")
             return result.get("rows", [])
         except Exception as e:
             logger.error(f"Failed to get firewall rules: {e}")
             return []
 
     def get_nat_rules(self) -> List[Dict]:
-        """Get NAT port forwarding rules"""
+        """Get NAT rules (Source NAT / Outbound)"""
+        nat_rules = []
+        
+        # Get Source NAT rules
         try:
-            result = self._make_request("GET", "/firewall/nat/searchRule")
-            return result.get("rows", [])
+            result = self._make_request("POST", "/firewall/source_nat/search_rule")
+            for rule in result.get("rows", []):
+                rule["nat_type"] = "source_nat"
+                nat_rules.append(rule)
         except Exception as e:
-            logger.error(f"Failed to get NAT rules: {e}")
-            return []
+            logger.debug(f"Failed to get Source NAT rules: {e}")
+        
+        # Get 1:1 NAT rules
+        try:
+            result = self._make_request("POST", "/firewall/one_to_one/search_rule")
+            for rule in result.get("rows", []):
+                rule["nat_type"] = "one_to_one"
+                nat_rules.append(rule)
+        except Exception as e:
+            logger.debug(f"Failed to get 1:1 NAT rules: {e}")
+        
+        # Get NPT (IPv6 Network Prefix Translation) rules
+        try:
+            result = self._make_request("POST", "/firewall/npt/search_rule")
+            for rule in result.get("rows", []):
+                rule["nat_type"] = "npt"
+                nat_rules.append(rule)
+        except Exception as e:
+            logger.debug(f"Failed to get NPT rules: {e}")
+        
+        return nat_rules
 
     def get_interfaces(self) -> Dict:
         """Get all network interfaces"""
@@ -74,28 +99,29 @@ class OPNsenseClient:
     def get_vlans(self) -> List[Dict]:
         """Get VLAN configuration"""
         try:
-            result = self._make_request("GET", "/interfaces/vlan_settings/search")
+            # Use POST for search_item per OPNsense API docs
+            result = self._make_request("POST", "/interfaces/vlan_settings/search_item")
             return result.get("rows", [])
         except Exception as e:
-            logger.error(f"Failed to get VLANs: {e}")
+            logger.debug(f"Failed to get VLANs: {e}")
             return []
 
     def get_dhcp_leases(self) -> List[Dict]:
         """Get DHCP leases"""
         try:
-            result = self._make_request("GET", "/dhcpv4/leases/searchLease")
+            result = self._make_request("GET", "/dhcpv4/leases/search")
             return result.get("rows", [])
         except Exception as e:
-            logger.error(f"Failed to get DHCP leases: {e}")
+            logger.debug(f"Failed to get DHCP leases: {e}")
             return []
 
     def get_arp_table(self) -> List[Dict]:
         """Get ARP table"""
         try:
-            result = self._make_request("GET", "/diagnostics/interface/search_arp")
-            return result.get("rows", [])
+            result = self._make_request("GET", "/diagnostics/interface/getArp")
+            return result.get("rows", []) if isinstance(result, dict) else result
         except Exception as e:
-            logger.error(f"Failed to get ARP table: {e}")
+            logger.debug(f"Failed to get ARP table: {e}")
             return []
 
     def get_dns_config(self) -> Dict:
@@ -110,10 +136,10 @@ class OPNsenseClient:
     def get_alias_list(self) -> List[Dict]:
         """Get firewall aliases"""
         try:
-            result = self._make_request("GET", "/firewall/alias/searchItem")
+            result = self._make_request("POST", "/firewall/alias/search_item")
             return result.get("rows", [])
         except Exception as e:
-            logger.error(f"Failed to get aliases: {e}")
+            logger.debug(f"Failed to get aliases: {e}")
             return []
 
     def get_system_info(self) -> Dict:
@@ -128,10 +154,10 @@ class OPNsenseClient:
     def get_routes(self) -> List[Dict]:
         """Get routing table"""
         try:
-            result = self._make_request("GET", "/routes/routes/search")
-            return result.get("rows", [])
+            result = self._make_request("GET", "/routes/gateway/status")
+            return result.get("items", []) if isinstance(result, dict) else []
         except Exception as e:
-            logger.error(f"Failed to get routes: {e}")
+            logger.debug(f"Failed to get routes: {e}")
             return []
 
     def test_connection(self) -> bool:
@@ -195,10 +221,10 @@ class OPNsenseClient:
     def get_certificates(self) -> List[Dict]:
         """Get SSL/TLS certificates"""
         try:
-            result = self._make_request("GET", "/trust/cert/search")
+            result = self._make_request("POST", "/trust/cert/search")
             return result.get("rows", [])
         except Exception as e:
-            logger.error(f"Failed to get certificates: {e}")
+            logger.debug(f"Failed to get certificates: {e}")
             return []
 
     def get_vpn_config(self) -> Dict:
@@ -206,19 +232,19 @@ class OPNsenseClient:
         vpn_config = {"openvpn": [], "wireguard": [], "ipsec": {}}
 
         try:
-            result = self._make_request("GET", "/openvpn/instances/search")
+            result = self._make_request("POST", "/openvpn/instances/search")
             vpn_config["openvpn"] = result.get("rows", [])
         except Exception as e:
             logger.debug(f"Failed to get OpenVPN config: {e}")
 
         try:
-            result = self._make_request("GET", "/wireguard/server/search")
+            result = self._make_request("POST", "/wireguard/server/search_server")
             vpn_config["wireguard"] = result.get("rows", [])
         except Exception as e:
             logger.debug(f"Failed to get WireGuard config: {e}")
 
         try:
-            result = self._make_request("GET", "/ipsec/tunnel/search")
+            result = self._make_request("POST", "/ipsec/tunnel/search_phase1")
             vpn_config["ipsec"] = result.get("rows", [])
         except Exception as e:
             logger.debug(f"Failed to get IPsec config: {e}")
@@ -228,8 +254,17 @@ class OPNsenseClient:
     def get_firewall_settings(self) -> Dict:
         """Get firewall advanced settings"""
         try:
-            result = self._make_request("GET", "/firewall/settings/get")
+            result = self._make_request("GET", "/firewall/filter_base/get")
             return result
         except Exception as e:
-            logger.error(f"Failed to get firewall settings: {e}")
+            logger.debug(f"Failed to get firewall settings: {e}")
+            return {}
+
+    def get_legacy_config(self, section: str) -> Dict:
+        """Get legacy configuration via diagnostics API"""
+        try:
+            result = self._make_request("GET", f"/diagnostics/firewall/pf_states")
+            return result
+        except Exception as e:
+            logger.debug(f"Failed to get legacy config: {e}")
             return {}

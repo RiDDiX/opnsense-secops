@@ -99,6 +99,50 @@ class SecurityAuditor:
             logger.error(f"Failed to initialize OPNsense client: {e}")
             return False
 
+    def _get_scan_networks(self) -> List[str]:
+        """Get list of networks to scan from config or environment"""
+        import json
+        networks = []
+        
+        # First, check for saved network selection in config
+        config_file = "/app/config/scan_networks.json"
+        try:
+            if os.path.exists(config_file):
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                selected = config.get('selected_networks', [])
+                if selected:
+                    networks = [n.get('network') for n in selected if n.get('network') and n.get('enabled', True)]
+                    if networks:
+                        logger.info(f"Using {len(networks)} networks from config: {networks}")
+                        return networks
+        except Exception as e:
+            logger.debug(f"Could not load network config: {e}")
+        
+        # Fallback to environment variables
+        if self.scan_network:
+            networks.append(self.scan_network)
+        
+        additional_networks = os.getenv("ADDITIONAL_NETWORKS", "")
+        if additional_networks:
+            networks.extend([n.strip() for n in additional_networks.split(",")])
+        
+        # Filter to only private networks
+        import ipaddress
+        private_networks = []
+        for net in networks:
+            try:
+                network = ipaddress.ip_network(net, strict=False)
+                if network.is_private:
+                    private_networks.append(net)
+                else:
+                    logger.warning(f"Skipping non-private network: {net}")
+            except ValueError:
+                logger.warning(f"Invalid network format: {net}")
+        
+        logger.info(f"Scanning networks: {private_networks}")
+        return private_networks
+
     def initialize_analyzers(self):
         """Initialize all analyzers"""
         scan_options = self.config_loader.get_scan_options()
@@ -137,6 +181,18 @@ class SecurityAuditor:
 
         logger.info("All analyzers initialized")
 
+    def _update_progress(self, step_name: str, step_number: int) -> bool:
+        """Update scan progress if scan_manager is available. Returns False if cancelled."""
+        if hasattr(self, 'scan_manager') and self.scan_manager:
+            return self.scan_manager.update(step_name, step_number)
+        return True
+
+    def _is_cancelled(self) -> bool:
+        """Check if scan was cancelled"""
+        if hasattr(self, 'scan_manager') and self.scan_manager:
+            return self.scan_manager.is_cancelled()
+        return False
+
     def run_audit(self) -> Dict:
         """Run complete security audit"""
         logger.info("Starting security audit...")
@@ -160,7 +216,10 @@ class SecurityAuditor:
             "security_grade": "F"
         }
 
-        # Collect data from OPNsense
+        # Step 4: Collect data from OPNsense
+        if not self._update_progress('Collecting data from OPNsense...', 4):
+            return results
+        
         logger.info("Collecting data from OPNsense...")
         firewall_rules = self.client.get_firewall_rules()
         nat_rules = self.client.get_nat_rules()
@@ -173,6 +232,9 @@ class SecurityAuditor:
         logger.info(f"Retrieved {len(firewall_rules)} firewall rules")
         logger.info(f"Retrieved {len(nat_rules)} NAT rules")
         logger.info(f"Retrieved {len(vlans)} VLANs")
+
+        if self._is_cancelled():
+            return results
 
         # Analyze Firewall Rules
         logger.info("Analyzing firewall rules...")
@@ -192,12 +254,15 @@ class SecurityAuditor:
         results["vlan_findings"] = [asdict(f) for f in vlan_findings]
         logger.info(f"Found {len(vlan_findings)} VLAN issues")
 
-        # Network Discovery
+        if self._is_cancelled():
+            return results
+
+        # Step 5: Network Discovery
+        if not self._update_progress('Discovering network devices...', 5):
+            return results
+        
         logger.info("Starting network discovery...")
-        networks = [self.scan_network]
-        additional_networks = os.getenv("ADDITIONAL_NETWORKS", "")
-        if additional_networks:
-            networks.extend([n.strip() for n in additional_networks.split(",")])
+        networks = self._get_scan_networks()
 
         devices = self.network_discovery.discover_network(networks, dhcp_leases, arp_table, vlans)
         results["devices"] = [asdict(d) for d in devices]
@@ -207,7 +272,13 @@ class SecurityAuditor:
         results["network_map"] = self.network_discovery.generate_network_map(devices)
         results["statistics"] = self.network_discovery.get_device_statistics(devices)
 
-        # Port Scanning
+        if self._is_cancelled():
+            return results
+
+        # Step 6: Port Scanning
+        if not self._update_progress('Scanning ports on discovered devices...', 6):
+            return results
+        
         logger.info("Scanning for open ports on discovered devices...")
         active_hosts = [d.ip for d in devices if d.status == "active"]
         excluded_hosts = self.config_loader.get_host_exceptions()

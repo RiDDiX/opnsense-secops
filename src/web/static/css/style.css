@@ -870,3 +870,143 @@ body {
         grid-template-columns: 1fr;
     }
 }
+
+/* Scan Progress Overlay */
+.scan-progress-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(4px);
+}
+
+.scan-progress-overlay.hidden {
+    display: none;
+}
+
+.scan-progress-card {
+    background: white;
+    border-radius: 16px;
+    padding: 2rem 3rem;
+    max-width: 500px;
+    width: 90%;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.scan-progress-card h3 {
+    margin: 0 0 1.5rem 0;
+    color: #2c3e50;
+    font-size: 1.4rem;
+}
+
+.scan-progress-card h3 i {
+    color: #3498db;
+    margin-right: 0.5rem;
+}
+
+.progress-container {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.progress-bar {
+    flex: 1;
+    height: 12px;
+    background: #ecf0f1;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #3498db, #2ecc71);
+    border-radius: 6px;
+    transition: width 0.3s ease;
+}
+
+#progress-percent {
+    font-weight: 600;
+    color: #3498db;
+    min-width: 45px;
+}
+
+.progress-details {
+    margin-bottom: 1.5rem;
+}
+
+.progress-details p {
+    margin: 0.5rem 0;
+    color: #7f8c8d;
+}
+
+#progress-step {
+    font-weight: 500;
+    color: #2c3e50;
+    font-size: 1.1rem;
+}
+
+.progress-actions {
+    margin-top: 1rem;
+}
+
+.btn-danger {
+    background: #e74c3c;
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    transition: all 0.2s;
+}
+
+.btn-danger:hover {
+    background: #c0392b;
+    transform: translateY(-1px);
+}
+
+.btn-danger:disabled {
+    background: #95a5a6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Status indicator colors */
+.scan-status .status-running .status-dot {
+    background: #f39c12;
+    animation: pulse 1s infinite;
+}
+
+.scan-status .status-completed .status-dot {
+    background: #27ae60;
+}
+
+.scan-status .status-failed .status-dot {
+    background: #e74c3c;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}

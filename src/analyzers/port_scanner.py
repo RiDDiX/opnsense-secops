@@ -1,10 +1,11 @@
 """
 Port Scanner
-Scans networks for open ports and identifies security issues
+Scans for open ports and identifies critical services
 """
-import nmap
 import logging
-from typing import Dict, List, Set
+import nmap
+import ipaddress
+from typing import Dict, List
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -53,19 +54,47 @@ class PortScanner:
                     self.exception_ports[host] = set()
                 self.exception_ports[host].add(port)
 
+    def _is_private_ip(self, ip: str) -> bool:
+        """Check if IP is a private/internal address (RFC1918)"""
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+            return ip_obj.is_private and not ip_obj.is_loopback
+        except ValueError:
+            return False
+
     def scan_network(self, network: str, hosts: List[str] = None) -> List[PortFinding]:
-        """Scan network or specific hosts for open ports"""
+        """Scan network or specific hosts for open ports (internal networks only)"""
         findings = []
 
         if hosts:
-            # Scan specific hosts
-            for host in hosts:
+            # Filter to only scan private/internal IPs
+            internal_hosts = [h for h in hosts if self._is_private_ip(h)]
+            external_hosts = [h for h in hosts if not self._is_private_ip(h)]
+            
+            if external_hosts:
+                logger.info(f"Skipping {len(external_hosts)} external IPs (not scanning public internet)")
+            
+            logger.info(f"Scanning {len(internal_hosts)} internal hosts")
+            
+            # Scan internal hosts
+            for host in internal_hosts:
                 findings.extend(self._scan_host(host))
         else:
-            # Scan entire network
-            findings.extend(self._scan_network_range(network))
+            # Scan entire network (only if it's a private network)
+            if network and self._is_private_network(network):
+                findings.extend(self._scan_network_range(network))
+            else:
+                logger.warning(f"Skipping non-private network: {network}")
 
         return findings
+
+    def _is_private_network(self, network: str) -> bool:
+        """Check if network is a private network"""
+        try:
+            net = ipaddress.ip_network(network, strict=False)
+            return net.is_private
+        except ValueError:
+            return False
 
     def _scan_network_range(self, network: str) -> List[PortFinding]:
         """Scan entire network range"""

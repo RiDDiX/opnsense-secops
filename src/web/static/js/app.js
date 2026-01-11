@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadIgnoreList();
     loadSecurityScore();
     loadOptimalConfig();
+    checkInitialScanStatus();
 
     // Event listeners
     document.getElementById('start-scan-btn').addEventListener('click', startScan);
@@ -118,20 +119,146 @@ async function saveConfig() {
     showToast(data.success ? 'success' : 'error', data.message || (data.success ? t('success') : t('error')));
 }
 
-// Scan
-async function startScan() {
-    document.getElementById('scan-status-indicator').className = 'status-running';
-    document.getElementById('scan-status-text').textContent = t('scan_running');
+// Scan Progress
+let scanPollingInterval = null;
 
+async function startScan() {
     const response = await fetch('/api/scan/start', {method: 'POST'});
     const data = await response.json();
 
     if (data.success) {
-        showToast('success', t('scan_running'));
-        setTimeout(loadReports, 5000);
+        showScanProgress();
+        startProgressPolling();
+        showToast('success', 'Scan started');
     } else {
-        showToast('error', data.error);
-        document.getElementById('scan-status-indicator').className = 'status-idle';
+        showToast('error', data.error || 'Failed to start scan');
+    }
+}
+
+function showScanProgress() {
+    document.getElementById('scan-progress-overlay').classList.remove('hidden');
+    document.getElementById('scan-status-indicator').className = 'status-running';
+    document.getElementById('scan-status-text').textContent = 'Running';
+}
+
+function hideScanProgress() {
+    document.getElementById('scan-progress-overlay').classList.add('hidden');
+}
+
+function updateProgressUI(status) {
+    document.getElementById('progress-fill').style.width = status.progress + '%';
+    document.getElementById('progress-percent').textContent = status.progress + '%';
+    document.getElementById('progress-step').textContent = status.current_step || 'Processing...';
+    document.getElementById('step-current').textContent = status.step_number || 0;
+    document.getElementById('step-total').textContent = status.total_steps || 7;
+    
+    // Update status indicator
+    const indicator = document.getElementById('scan-status-indicator');
+    const statusText = document.getElementById('scan-status-text');
+    
+    if (status.status === 'running' || status.status === 'cancelling') {
+        indicator.className = 'status-running';
+        statusText.textContent = status.status === 'cancelling' ? 'Cancelling...' : 'Running';
+    } else if (status.status === 'completed') {
+        indicator.className = 'status-completed';
+        statusText.textContent = 'Completed';
+    } else if (status.status === 'failed' || status.status === 'cancelled') {
+        indicator.className = 'status-failed';
+        statusText.textContent = status.status === 'cancelled' ? 'Cancelled' : 'Failed';
+    } else {
+        indicator.className = 'status-idle';
+        statusText.textContent = 'Idle';
+    }
+    
+    // Disable cancel button if not running
+    const cancelBtn = document.getElementById('cancel-scan-btn');
+    if (cancelBtn) {
+        cancelBtn.disabled = status.status !== 'running';
+        if (status.status === 'cancelling') {
+            cancelBtn.textContent = 'Cancelling...';
+            cancelBtn.disabled = true;
+        }
+    }
+}
+
+function startProgressPolling() {
+    // Clear any existing interval
+    if (scanPollingInterval) {
+        clearInterval(scanPollingInterval);
+    }
+    
+    // Poll every 1 second
+    scanPollingInterval = setInterval(async () => {
+        try {
+            const response = await fetch('/api/scan/status');
+            const data = await response.json();
+            
+            if (data.success) {
+                updateProgressUI(data);
+                
+                // Stop polling when scan completes or fails
+                if (['completed', 'failed', 'cancelled', 'idle'].includes(data.status)) {
+                    clearInterval(scanPollingInterval);
+                    scanPollingInterval = null;
+                    
+                    // Hide progress after a delay
+                    setTimeout(() => {
+                        hideScanProgress();
+                        
+                        if (data.status === 'completed') {
+                            showToast('success', 'Scan completed successfully');
+                            loadReports();
+                            loadSecurityScore();
+                        } else if (data.status === 'failed') {
+                            showToast('error', 'Scan failed: ' + (data.error || 'Unknown error'));
+                        } else if (data.status === 'cancelled') {
+                            showToast('warning', 'Scan cancelled');
+                        }
+                    }, 1500);
+                }
+            }
+        } catch (e) {
+            console.error('Failed to poll scan status:', e);
+        }
+    }, 1000);
+}
+
+async function cancelScan() {
+    const cancelBtn = document.getElementById('cancel-scan-btn');
+    cancelBtn.disabled = true;
+    cancelBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Cancelling...';
+    
+    try {
+        const response = await fetch('/api/scan/cancel', {method: 'POST'});
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast('warning', 'Cancellation requested');
+        } else {
+            showToast('error', data.error || 'Failed to cancel');
+            cancelBtn.disabled = false;
+            cancelBtn.innerHTML = '<i class="fas fa-times"></i> Cancel Scan';
+        }
+    } catch (e) {
+        showToast('error', 'Failed to cancel scan');
+        cancelBtn.disabled = false;
+        cancelBtn.innerHTML = '<i class="fas fa-times"></i> Cancel Scan';
+    }
+}
+
+// Check scan status on page load
+async function checkInitialScanStatus() {
+    try {
+        const response = await fetch('/api/scan/status');
+        const data = await response.json();
+        
+        if (data.success && data.status === 'running') {
+            showScanProgress();
+            updateProgressUI(data);
+            startProgressPolling();
+        }
+    } catch (e) {
+        console.error('Failed to check initial scan status:', e);
     }
 }
 

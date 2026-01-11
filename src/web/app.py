@@ -13,8 +13,83 @@ import sys
 from src.config_loader import ConfigLoader
 from src.opnsense_client import OPNsenseClient
 from src.main import SecurityAuditor
+import threading
+import time
 
 app = Flask(__name__)
+
+# Global scan state manager
+class ScanManager:
+    def __init__(self):
+        self.status = 'idle'  # idle, running, completed, failed, cancelled
+        self.progress = 0
+        self.current_step = ''
+        self.total_steps = 7
+        self.step_number = 0
+        self.started_at = None
+        self.completed_at = None
+        self.error = None
+        self.cancel_requested = False
+        self.lock = threading.Lock()
+    
+    def start(self):
+        with self.lock:
+            self.status = 'running'
+            self.progress = 0
+            self.current_step = 'Initializing...'
+            self.step_number = 0
+            self.started_at = datetime.now().isoformat()
+            self.completed_at = None
+            self.error = None
+            self.cancel_requested = False
+    
+    def update(self, step_name: str, step_number: int):
+        with self.lock:
+            if self.cancel_requested:
+                self.status = 'cancelled'
+                return False
+            self.current_step = step_name
+            self.step_number = step_number
+            self.progress = int((step_number / self.total_steps) * 100)
+            return True
+    
+    def complete(self):
+        with self.lock:
+            self.status = 'completed'
+            self.progress = 100
+            self.current_step = 'Scan completed'
+            self.completed_at = datetime.now().isoformat()
+    
+    def fail(self, error: str):
+        with self.lock:
+            self.status = 'failed'
+            self.error = error
+            self.completed_at = datetime.now().isoformat()
+    
+    def cancel(self):
+        with self.lock:
+            self.cancel_requested = True
+            if self.status == 'running':
+                self.status = 'cancelling'
+    
+    def get_status(self):
+        with self.lock:
+            return {
+                'status': self.status,
+                'progress': self.progress,
+                'current_step': self.current_step,
+                'step_number': self.step_number,
+                'total_steps': self.total_steps,
+                'started_at': self.started_at,
+                'completed_at': self.completed_at,
+                'error': self.error
+            }
+    
+    def is_cancelled(self):
+        with self.lock:
+            return self.cancel_requested
+
+scan_manager = ScanManager()
 CORS(app)
 
 # Configure logging
@@ -96,23 +171,68 @@ def save_config():
 @app.route('/api/scan/start', methods=['POST'])
 def start_scan():
     """Start a new security scan"""
+    global scan_manager
+    
     try:
-        # Run scan in background (in production, use Celery or similar)
-        import threading
+        # Check if scan is already running
+        current_status = scan_manager.get_status()
+        if current_status['status'] == 'running':
+            return jsonify({
+                'success': False,
+                'error': 'A scan is already in progress',
+                'status': current_status
+            }), 400
 
         def run_scan():
+            global scan_manager
             try:
+                scan_manager.start()
+                
+                # Step 1: Initialize
+                if not scan_manager.update('Validating configuration...', 1):
+                    return
+                
                 auditor = SecurityAuditor()
-                if auditor.validate_configuration():
-                    if auditor.initialize_client():
-                        auditor.initialize_analyzers()
-                        results = auditor.run_audit()
-
-                        # Generate reports
-                        report_files = auditor.report_generator.generate_reports(results, REPORTS_DIR)
-                        logger.info(f"Scan completed. Reports: {report_files}")
+                if not auditor.validate_configuration():
+                    scan_manager.fail('Configuration validation failed')
+                    return
+                
+                # Step 2: Connect to OPNsense
+                if not scan_manager.update('Connecting to OPNsense...', 2):
+                    return
+                
+                if not auditor.initialize_client():
+                    scan_manager.fail('Failed to connect to OPNsense')
+                    return
+                
+                # Step 3: Initialize analyzers
+                if not scan_manager.update('Initializing analyzers...', 3):
+                    return
+                
+                auditor.initialize_analyzers()
+                
+                # Pass scan_manager to auditor for progress updates
+                auditor.scan_manager = scan_manager
+                
+                # Step 4-6: Run audit (progress updated inside)
+                results = auditor.run_audit()
+                
+                if scan_manager.is_cancelled():
+                    scan_manager.status = 'cancelled'
+                    return
+                
+                # Step 7: Generate reports
+                if not scan_manager.update('Generating reports...', 7):
+                    return
+                
+                report_files = auditor.report_generator.generate_reports(results, REPORTS_DIR)
+                logger.info(f"Scan completed. Reports: {report_files}")
+                
+                scan_manager.complete()
+                
             except Exception as e:
                 logger.error(f"Scan failed: {e}", exc_info=True)
+                scan_manager.fail(str(e))
 
         thread = threading.Thread(target=run_scan)
         thread.daemon = True
@@ -121,7 +241,7 @@ def start_scan():
         return jsonify({
             'success': True,
             'message': 'Scan started',
-            'status': 'running'
+            'status': scan_manager.get_status()
         })
     except Exception as e:
         logger.error(f"Failed to start scan: {e}")
@@ -130,12 +250,32 @@ def start_scan():
 
 @app.route('/api/scan/status', methods=['GET'])
 def scan_status():
-    """Get scan status"""
-    # TODO: Implement proper scan status tracking
+    """Get current scan status and progress"""
+    global scan_manager
     return jsonify({
         'success': True,
-        'status': 'idle',
-        'progress': 0
+        **scan_manager.get_status()
+    })
+
+
+@app.route('/api/scan/cancel', methods=['POST'])
+def cancel_scan():
+    """Cancel the running scan"""
+    global scan_manager
+    
+    current_status = scan_manager.get_status()
+    if current_status['status'] not in ['running', 'cancelling']:
+        return jsonify({
+            'success': False,
+            'error': 'No scan is currently running'
+        }), 400
+    
+    scan_manager.cancel()
+    
+    return jsonify({
+        'success': True,
+        'message': 'Scan cancellation requested',
+        'status': scan_manager.get_status()
     })
 
 
@@ -409,6 +549,112 @@ def get_security_score():
         })
     except Exception as e:
         logger.error(f"Failed to get security score: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/networks', methods=['GET'])
+def get_available_networks():
+    """Fetch available networks/interfaces from OPNsense"""
+    try:
+        host = os.getenv('OPNSENSE_HOST')
+        api_key = os.getenv('OPNSENSE_API_KEY')
+        api_secret = os.getenv('OPNSENSE_API_SECRET')
+        
+        if not all([host, api_key, api_secret]):
+            return jsonify({
+                'success': False,
+                'error': 'OPNsense credentials not configured'
+            }), 400
+        
+        client = OPNsenseClient(host, api_key, api_secret)
+        
+        # Get interfaces
+        interfaces = client.get_interfaces()
+        
+        # Get VLANs
+        vlans = client.get_vlans()
+        
+        # Build network list
+        networks = []
+        
+        # Parse interfaces for networks
+        if isinstance(interfaces, dict):
+            for iface_name, iface_data in interfaces.items():
+                if isinstance(iface_data, dict):
+                    # Get IPv4 address/network
+                    ipv4 = iface_data.get('ipv4', [])
+                    if ipv4 and isinstance(ipv4, list):
+                        for addr_info in ipv4:
+                            if isinstance(addr_info, dict):
+                                addr = addr_info.get('ipaddr', '')
+                                subnet = addr_info.get('subnetbits', '24')
+                                if addr and not addr.startswith('127.'):
+                                    # Calculate network from address
+                                    try:
+                                        import ipaddress
+                                        network = ipaddress.ip_network(f"{addr}/{subnet}", strict=False)
+                                        networks.append({
+                                            'name': iface_data.get('descr', iface_name),
+                                            'interface': iface_name,
+                                            'network': str(network),
+                                            'type': 'interface',
+                                            'enabled': iface_data.get('enable', '1') == '1'
+                                        })
+                                    except:
+                                        pass
+        
+        # Add VLANs
+        for vlan in vlans:
+            vlan_id = vlan.get('vlanif', vlan.get('tag', ''))
+            networks.append({
+                'name': f"VLAN {vlan_id}" + (f" - {vlan.get('descr', '')}" if vlan.get('descr') else ''),
+                'interface': vlan.get('if', ''),
+                'vlan_id': vlan_id,
+                'type': 'vlan',
+                'enabled': True
+            })
+        
+        return jsonify({
+            'success': True,
+            'networks': networks,
+            'vlans': vlans,
+            'interfaces': interfaces
+        })
+    except Exception as e:
+        logger.error(f"Failed to fetch networks: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/config/networks', methods=['POST'])
+def save_network_selection():
+    """Save selected networks for scanning"""
+    try:
+        data = request.json
+        selected_networks = data.get('networks', [])
+        
+        # Save to config file
+        config_file = os.path.join(CONFIG_DIR, 'scan_networks.json')
+        with open(config_file, 'w') as f:
+            json.dump({'selected_networks': selected_networks}, f, indent=2)
+        
+        return jsonify({'success': True, 'message': 'Network selection saved'})
+    except Exception as e:
+        logger.error(f"Failed to save network selection: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/config/networks', methods=['GET'])
+def get_network_selection():
+    """Get selected networks for scanning"""
+    try:
+        config_file = os.path.join(CONFIG_DIR, 'scan_networks.json')
+        if os.path.exists(config_file):
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+            return jsonify({'success': True, 'networks': config.get('selected_networks', [])})
+        return jsonify({'success': True, 'networks': []})
+    except Exception as e:
+        logger.error(f"Failed to get network selection: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
