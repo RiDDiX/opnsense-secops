@@ -204,7 +204,11 @@ class VLANAnalyzer:
         # Check for unusual VLAN ranges
         for vlan in vlans:
             vlan_tag = vlan.get("tag")
-            if vlan_tag > 4094:
+            try:
+                vlan_tag_int = int(vlan_tag) if vlan_tag else 0
+            except (ValueError, TypeError):
+                vlan_tag_int = 0
+            if vlan_tag_int > 4094:
                 findings.append(VLANFinding(
                     severity="LOW",
                     vlan_id=vlan_tag,

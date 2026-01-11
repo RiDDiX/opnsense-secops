@@ -109,11 +109,22 @@ class OPNsenseClient:
     def get_dhcp_leases(self) -> List[Dict]:
         """Get DHCP leases"""
         try:
-            result = self._make_request("GET", "/dhcpv4/leases/search")
-            return result.get("rows", [])
+            # Try ISC DHCP (os-dhcp-leases plugin)
+            result = self._make_request("GET", "/dhcpleases/service/get")
+            if result and "leases" in result:
+                return result.get("leases", {}).get("lease", [])
         except Exception as e:
-            logger.debug(f"Failed to get DHCP leases: {e}")
-            return []
+            logger.debug(f"Failed to get DHCP leases from dhcpleases: {e}")
+        
+        try:
+            # Try Kea DHCP4 plugin
+            result = self._make_request("GET", "/kea/dhcpv4/search")
+            if result:
+                return result.get("rows", [])
+        except Exception as e:
+            logger.debug(f"Failed to get DHCP leases from Kea: {e}")
+        
+        return []
 
     def get_arp_table(self) -> List[Dict]:
         """Get ARP table"""
