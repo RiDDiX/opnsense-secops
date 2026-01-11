@@ -1,92 +1,92 @@
 # OPNsense Security Auditor
 
-Ein umfassendes Security-Audit-Tool für OPNsense Firewalls. Analysiert automatisch Firewall-Regeln, offene Ports, DNS-Konfiguration, VLAN-Segmentierung und erstellt detaillierte Sicherheitsberichte mit konkreten Lösungsvorschlägen.
+A comprehensive security audit tool for OPNsense firewalls. Automatically analyzes firewall rules, open ports, DNS configuration, VLAN segmentation and creates detailed security reports with concrete remediation suggestions.
 
 ## Features
 
-### 🔥 Firewall-Regel-Analyse
-- Erkennt "Any-to-Any" Regeln
-- Identifiziert unsichere WAN-Regeln
-- Prüft fehlende Logging-Konfiguration
-- Analysiert NAT Port-Forwarding Regeln
-- Warnt vor zu permissiven Protokoll-Regeln
+### 🔥 Firewall Rule Analysis
+- Detects "Any-to-Any" rules
+- Identifies insecure WAN rules
+- Checks for missing logging configuration
+- Analyzes NAT port forwarding rules
+- Warns about overly permissive protocol rules
 
-### 🔓 Port-Security-Scanner
-- Scannt alle Geräte im Netzwerk nach offenen Ports
-- Identifiziert kritische Services (SSH, RDP, Datenbanken, etc.)
-- Prüft gegen konfigurierbare Port-Whitelist
-- Service-Detection und Version-Scanning
-- Paralleles Scanning für bessere Performance
+### 🔓 Port Security Scanner
+- Scans all devices on the network for open ports
+- Identifies critical services (SSH, RDP, databases, etc.)
+- Checks against configurable port whitelist
+- Service detection and version scanning
+- Parallel scanning for better performance
 
-### 🌐 DNS-Sicherheits-Analyse
-- DNSSEC Status-Prüfung
-- DNS Rebinding Protection
-- DNS over TLS (DoT) Konfiguration
-- Open Resolver Detection
-- DNS Amplification Tests
-- Access Control List Prüfung
+### 🌐 DNS Security Analysis
+- DNSSEC status check
+- DNS rebinding protection
+- DNS over TLS (DoT) configuration
+- Open resolver detection
+- DNS amplification tests
+- Access control list verification
 
-### 🔀 VLAN-Segmentierungs-Analyse
-- Prüft VLAN-Isolation
-- Erkennt fehlende Management-VLANs
-- Analysiert Guest-Network-Isolation
-- Empfiehlt Best-Practice VLAN-Struktur
-- Inter-VLAN Routing Security
+### 🔀 VLAN Segmentation Analysis
+- Checks VLAN isolation
+- Detects missing management VLANs
+- Analyzes guest network isolation
+- Recommends best-practice VLAN structure
+- Inter-VLAN routing security
 
-### 📊 Netzwerk-Discovery
-- Automatische Geräte-Erkennung
-- VLAN-Zuordnung für alle Geräte
-- MAC-Vendor-Lookup
-- Netzwerk-Topologie-Mapping
-- Integration mit DHCP-Leases und ARP-Tabelle
+### 📊 Network Discovery
+- Automatic device detection
+- VLAN assignment for all devices
+- MAC vendor lookup
+- Network topology mapping
+- Integration with DHCP leases and ARP table
 
 ### 📄 Reporting
-- **HTML-Reports**: Interaktive, farbcodierte Reports
-- **JSON-Reports**: Maschinenlesbare Daten für Integration
-- **Text-Reports**: Einfache Lesbarkeit für Terminal/Email
-- Severity-basierte Priorisierung
-- Konkrete Lösungsvorschläge für jedes Finding
-- Executive Summary Dashboard
+- **HTML Reports**: Interactive, color-coded reports
+- **JSON Reports**: Machine-readable data for integration
+- **Text Reports**: Simple readability for terminal/email
+- Severity-based prioritization
+- Concrete remediation suggestions for each finding
+- Executive summary dashboard
 
 ## Installation
 
-### Voraussetzungen
+### Prerequisites
 
-1. **OPNsense API Keys generieren**:
+1. **Generate OPNsense API Keys**:
    - In OPNsense: System > Access > Users
-   - User auswählen/erstellen
-   - API Keys generieren und notieren
+   - Select/create user
+   - Generate API keys and note them down
 
-2. **Docker & Docker Compose installiert**
+2. **Docker & Docker Compose installed**
 
 ### Setup
 
-1. Repository klonen oder Dateien kopieren:
+1. Clone repository or copy files:
 ```bash
-cd /path/to/opnsensedashboardtester
+cd /path/to/opnsense-secops
 ```
 
-2. Umgebungsvariablen konfigurieren:
+2. Configure environment variables:
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Trage deine OPNsense-Daten ein:
+Enter your OPNsense credentials:
 ```env
 OPNSENSE_HOST=192.168.1.1
-OPNSENSE_API_KEY=dein_api_key
-OPNSENSE_API_SECRET=dein_api_secret
+OPNSENSE_API_KEY=your_api_key
+OPNSENSE_API_SECRET=your_api_secret
 SCAN_NETWORK=192.168.1.0/24
 ```
 
-3. Konfiguration anpassen (optional):
+3. Customize configuration (optional):
 ```bash
-# Ports/Services für dein Homelab freigeben
+# Allow ports/services for your homelab
 nano config/exceptions.yaml
 ```
 
-Beispiel für Homelab-Services:
+Example for homelab services:
 ```yaml
 port_exceptions:
   - port: 8080
@@ -100,114 +100,114 @@ port_exceptions:
     reason: "Portainer"
 ```
 
-4. Docker Image bauen:
+4. Build Docker image:
 ```bash
 docker-compose build
 ```
 
-## Verwendung
+## Usage
 
-### Einfacher Scan
+### Simple Scan
 ```bash
 docker-compose up
 ```
 
-### Als Script ausführen
+### Run as Script
 ```bash
 docker-compose run --rm opnsense-auditor
 ```
 
-### Scan mit zusätzlichen Netzwerken
+### Scan with Additional Networks
 ```bash
 ADDITIONAL_NETWORKS="192.168.2.0/24,192.168.10.0/24" docker-compose up
 ```
 
-### Reports ansehen
-Die Reports werden im `reports/` Verzeichnis gespeichert:
-- `security_audit_YYYYMMDD_HHMMSS.html` - HTML Report (im Browser öffnen)
-- `security_audit_YYYYMMDD_HHMMSS.json` - JSON Daten
-- `security_audit_YYYYMMDD_HHMMSS.txt` - Text Report
-- `audit.log` - Detaillierte Logs
+### View Reports
+Reports are saved in the `reports/` directory:
+- `security_audit_YYYYMMDD_HHMMSS.html` - HTML report (open in browser)
+- `security_audit_YYYYMMDD_HHMMSS.json` - JSON data
+- `security_audit_YYYYMMDD_HHMMSS.txt` - Text report
+- `audit.log` - Detailed logs
 
-## Konfiguration
+## Configuration
 
 ### Security Rules (`config/rules.yaml`)
 
-Definiert welche Ports und Konfigurationen als kritisch gelten:
+Defines which ports and configurations are considered critical:
 
 ```yaml
 critical_ports:
   - port: 22
     name: "SSH"
     severity: "HIGH"
-    reason: "SSH sollte nicht öffentlich erreichbar sein"
+    reason: "SSH should not be publicly accessible"
 ```
 
-### Ausnahmen (`config/exceptions.yaml`)
+### Exceptions (`config/exceptions.yaml`)
 
-#### Port-Ausnahmen für Homelab
-Wenn du Services öffentlich verfügbar machst:
+#### Port Exceptions for Homelab
+If you expose services publicly:
 ```yaml
 port_exceptions:
   - port: 443
     host: "192.168.1.100"
-    reason: "Reverse Proxy für Webservices"
+    reason: "Reverse proxy for web services"
   - port: 8123
     host: "192.168.1.101"
     reason: "Home Assistant"
 ```
 
-#### Firewall-Regel-Ausnahmen
-Wenn du bewusst eine Regel hast die normalerweise gewarnt würde:
+#### Firewall Rule Exceptions
+If you intentionally have a rule that would normally trigger a warning:
 ```yaml
 firewall_exceptions:
-  - rule_id: "uuid-der-regel"
-    reason: "Benötigt für VPN Zugriff"
+  - rule_id: "uuid-of-rule"
+    reason: "Required for VPN access"
 ```
 
-#### DNS-Ausnahmen
+#### DNS Exceptions
 ```yaml
 dns_exceptions:
   - check: "dnssec_enabled"
-    reason: "ISP unterstützt kein DNSSEC"
+    reason: "ISP does not support DNSSEC"
 ```
 
-#### VLAN-Ausnahmen
-Wenn VLANs bewusst kommunizieren sollen:
+#### VLAN Exceptions
+If VLANs should intentionally communicate:
 ```yaml
 vlan_exceptions:
   - check: "vlan_isolation"
     vlans: [10, 20]
-    reason: "Management muss auf Server zugreifen"
+    reason: "Management needs to access servers"
 ```
 
-#### Scan-Optionen
+#### Scan Options
 ```yaml
 scan_options:
-  aggressive_scan: false        # Mehr Details, dauert länger
-  port_scan_timeout: 300        # Timeout in Sekunden
-  max_parallel_scans: 10        # Anzahl paralleler Scans
-  skip_ping: false              # Hosts scannen auch wenn Ping fehlschlägt
+  aggressive_scan: false        # More details, takes longer
+  port_scan_timeout: 300        # Timeout in seconds
+  max_parallel_scans: 10        # Number of parallel scans
+  skip_ping: false              # Scan hosts even if ping fails
 ```
 
-#### Report-Optionen
+#### Report Options
 ```yaml
 report_options:
   output_format: "all"          # json, html, text, all
   detail_level: "normal"        # minimal, normal, verbose
-  critical_only: false          # Nur kritische Findings
-  include_solutions: true       # Lösungsvorschläge einbeziehen
+  critical_only: false          # Only critical findings
+  include_solutions: true       # Include remediation suggestions
 ```
 
-## Beispiel: Homelab-Konfiguration
+## Example: Homelab Configuration
 
-Typische Homelab-Ausnahmen:
+Typical homelab exceptions:
 
 ```yaml
 port_exceptions:
-  # Web-Services
+  # Web Services
   - port: 80
-    reason: "HTTP Services (automatisch HTTPS Redirect)"
+    reason: "HTTP Services (automatic HTTPS redirect)"
   - port: 443
     reason: "HTTPS Services (Reverse Proxy)"
 
@@ -233,89 +233,89 @@ port_exceptions:
 
 host_exceptions:
   - ip: "192.168.1.1"
-    reason: "OPNsense selbst"
+    reason: "OPNsense itself"
 ```
 
-## Empfohlene VLAN-Struktur
+## Recommended VLAN Structure
 
-Das Tool empfiehlt folgende VLAN-Segmentierung:
+The tool recommends the following VLAN segmentation:
 
-| VLAN ID | Name | Zweck |
-|---------|------|-------|
+| VLAN ID | Name | Purpose |
+|---------|------|---------|
 | 10 | Management | OPNsense, Switches, APs |
-| 20 | Server | Server & Services |
+| 20 | Server | Servers & Services |
 | 30 | Workstations | User Workstations |
-| 40 | IoT | IoT Devices (isoliert) |
-| 50 | Guest | Guest Network (isoliert) |
+| 40 | IoT | IoT Devices (isolated) |
+| 50 | Guest | Guest Network (isolated) |
 | 99 | DMZ | Public facing services |
 
-## Sicherheits-Checks im Detail
+## Security Checks in Detail
 
 ### Firewall
-- ✅ Keine Any-to-Any Regeln
-- ✅ Eingehender WAN Traffic beschränkt
-- ✅ Logging für wichtige Regeln aktiviert
-- ✅ Spezifische Protokolle statt "any"
-- ✅ NAT Port Forwards nur für notwendige Services
-- ✅ Source-Beschränkung für Port Forwards
+- ✅ No Any-to-Any rules
+- ✅ Inbound WAN traffic restricted
+- ✅ Logging enabled for important rules
+- ✅ Specific protocols instead of "any"
+- ✅ NAT port forwards only for necessary services
+- ✅ Source restriction for port forwards
 
 ### Ports
-- ✅ SSH (22) nicht öffentlich
-- ✅ RDP (3389) nicht öffentlich
-- ✅ Datenbanken nicht öffentlich erreichbar
-- ✅ Docker API nicht exponiert
-- ✅ Admin-Interfaces geschützt
-- ✅ SMB/NetBIOS blockiert
+- ✅ SSH (22) not publicly accessible
+- ✅ RDP (3389) not publicly accessible
+- ✅ Databases not publicly reachable
+- ✅ Docker API not exposed
+- ✅ Admin interfaces protected
+- ✅ SMB/NetBIOS blocked
 
 ### DNS
-- ✅ DNSSEC aktiviert
-- ✅ DNS Rebinding Protection
-- ✅ DNS over TLS konfiguriert
-- ✅ Kein offener Resolver
-- ✅ Access Lists konfiguriert
-- ✅ Response Rate Limiting
+- ✅ DNSSEC enabled
+- ✅ DNS rebinding protection
+- ✅ DNS over TLS configured
+- ✅ No open resolver
+- ✅ Access lists configured
+- ✅ Response rate limiting
 
 ### VLANs
-- ✅ Dediziertes Management VLAN
-- ✅ Guest Network isoliert
-- ✅ IoT Devices segmentiert
-- ✅ Inter-VLAN Routing beschränkt
-- ✅ VLAN 1 nicht verwendet
+- ✅ Dedicated management VLAN
+- ✅ Guest network isolated
+- ✅ IoT devices segmented
+- ✅ Inter-VLAN routing restricted
+- ✅ VLAN 1 not used
 
 ## Troubleshooting
 
-### Container hat keine Berechtigung für Port-Scan
+### Container Lacks Permission for Port Scan
 ```bash
-# Docker mit erweiterten Berechtigungen starten
+# Start Docker with extended permissions
 docker-compose run --cap-add=NET_ADMIN --cap-add=NET_RAW opnsense-auditor
 ```
 
-### API-Verbindung schlägt fehl
-- API Keys in OPNsense überprüfen
-- Firewall-Regel für API-Zugriff prüfen
-- Netzwerk-Erreichbarkeit testen: `ping <opnsense-ip>`
+### API Connection Fails
+- Check API keys in OPNsense
+- Verify firewall rule for API access
+- Test network connectivity: `ping <opnsense-ip>`
 
-### Scan dauert zu lange
-Passe `scan_options` an:
+### Scan Takes Too Long
+Adjust `scan_options`:
 ```yaml
 scan_options:
-  max_parallel_scans: 20  # Mehr parallel (Vorsicht: Netzwerklast)
-  port_scan_timeout: 120  # Kürzeres Timeout
+  max_parallel_scans: 20  # More parallel (caution: network load)
+  port_scan_timeout: 120  # Shorter timeout
 ```
 
-### Zu viele False Positives
-Nutze `exceptions.yaml` um bekannte/gewollte Konfigurationen auszunehmen.
+### Too Many False Positives
+Use `exceptions.yaml` to exclude known/intended configurations.
 
-## Automatisierung
+## Automation
 
-### Cronjob für regelmäßige Scans
+### Cronjob for Regular Scans
 ```bash
-# Täglich um 3 Uhr morgens
-0 3 * * * cd /path/to/opnsensedashboardtester && docker-compose run --rm opnsense-auditor
+# Daily at 3 AM
+0 3 * * * cd /path/to/opnsense-secops && docker-compose run --rm opnsense-auditor
 ```
 
-### Integration mit Monitoring
-Die JSON-Reports können in Monitoring-Systeme integriert werden:
+### Integration with Monitoring
+JSON reports can be integrated into monitoring systems:
 ```python
 import json
 
@@ -323,29 +323,29 @@ with open('reports/security_audit_latest.json') as f:
     audit = json.load(f)
 
 if audit['summary']['critical'] > 0:
-    send_alert("Kritische Sicherheitsprobleme gefunden!")
+    send_alert("Critical security issues found!")
 ```
 
-## Sicherheitshinweise
+## Security Notes
 
-- 🔒 API Keys niemals in Git committen
-- 🔒 Docker Container läuft mit `network_mode: host` für Netzwerk-Scanning
-- 🔒 Tool nur in vertrauenswürdigen Netzwerken ausführen
-- 🔒 Reports können sensible Netzwerk-Informationen enthalten
-- 🔒 Regelmäßige Scans empfohlen (wöchentlich/monatlich)
+- 🔒 Never commit API keys to Git
+- 🔒 Docker container runs with `network_mode: host` for network scanning
+- 🔒 Only run tool in trusted networks
+- 🔒 Reports may contain sensitive network information
+- 🔒 Regular scans recommended (weekly/monthly)
 
-## Beitragen
+## Contributing
 
-Feedback und Verbesserungsvorschläge willkommen! Öffne ein Issue oder Pull Request.
+Feedback and improvement suggestions welcome! Open an issue or pull request.
 
-## Lizenz
+## License
 
-MIT License - Frei verwendbar für private und kommerzielle Projekte.
+MIT License - Free to use for private and commercial projects.
 
-## Wichtiger Hinweis
+## Important Notice
 
-Dieses Tool ist für **autorisierte Sicherheitstests** gedacht. Verwende es nur in Netzwerken, für die du die Berechtigung hast. Port-Scanning ohne Erlaubnis kann illegal sein.
+This tool is intended for **authorized security testing**. Only use it on networks you have permission to test. Port scanning without authorization may be illegal.
 
 ---
 
-**Erstellt für sichere Homelab- und Enterprise-Netzwerke mit OPNsense** 🔒
+**Built for secure homelab and enterprise networks with OPNsense** 🔒
