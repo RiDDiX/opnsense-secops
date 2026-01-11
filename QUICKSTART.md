@@ -13,7 +13,7 @@
 
 ```bash
 # In das Projekt-Verzeichnis wechseln
-cd /Users/maximilianhammerschmid/Documents/projekte/opnsensedashboardtester
+cd opnsensedashboardtester
 
 # .env Datei erstellen
 cp .env.example .env

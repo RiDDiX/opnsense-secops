@@ -13,4 +13,7 @@ services:
       - OPNSENSE_API_KEY=${OPNSENSE_API_KEY}
       - OPNSENSE_API_SECRET=${OPNSENSE_API_SECRET}
       - SCAN_NETWORK=${SCAN_NETWORK:-192.168.1.0/24}
-    restart: "no"
+    ports:
+      - "5000:5000"
+    command: python -m src.web.app
+    restart: unless-stopped

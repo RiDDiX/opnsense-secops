@@ -29,7 +29,7 @@ Das komplette OPNsense Security Audit Tool ist einsatzbereit mit:
 ### Schritt 2: Projekt konfigurieren (3 Min)
 
 ```bash
-cd /Users/maximilianhammerschmid/Documents/projekte/opnsensedashboardtester
+cd opnsensedashboardtester
 
 # .env erstellen
 cp .env.example .env

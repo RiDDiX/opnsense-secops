@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OPNsense Security Auditor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+        <div class="logo">
+            <i class="fas fa-shield-alt"></i>
+            <h1>OPNsense<br><span>Security Auditor</span></h1>
+        </div>
+
+        <nav class="nav-menu">
+            <a href="#dashboard" class="nav-item active" data-page="dashboard">
+                <i class="fas fa-home"></i>
+                <span data-i18n="dashboard">Dashboard</span>
+            </a>
+            <a href="#configuration" class="nav-item" data-page="configuration">
+                <i class="fas fa-cog"></i>
+                <span data-i18n="configuration">Configuration</span>
+            </a>
+            <a href="#reports" class="nav-item" data-page="reports">
+                <i class="fas fa-file-alt"></i>
+                <span data-i18n="reports">Reports</span>
+            </a>
+            <a href="#ignore-list" class="nav-item" data-page="ignore-list">
+                <i class="fas fa-list"></i>
+                <span data-i18n="ignore_list">Ignore List</span>
+            </a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="language-selector">
+                <select id="language-select">
+                    <option value="en">English</option>
+                    <option value="de">Deutsch</option>
+                </select>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Top Bar -->
+        <header class="top-bar">
+            <div class="scan-controls">
+                <button id="start-scan-btn" class="btn btn-primary">
+                    <i class="fas fa-play"></i>
+                    <span data-i18n="start_scan">Start Scan</span>
+                </button>
+                <button id="refresh-btn" class="btn btn-secondary">
+                    <i class="fas fa-sync-alt"></i>
+                    <span data-i18n="refresh">Refresh</span>
+                </button>
+            </div>
+            <div class="scan-status">
+                <div id="scan-status-indicator" class="status-idle">
+                    <span class="status-dot"></span>
+                    <span id="scan-status-text" data-i18n="status">Idle</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Dashboard Page -->
+        <div id="page-dashboard" class="page active">
+            <h2 data-i18n="dashboard">Dashboard</h2>
+
+            <!-- Summary Cards -->
+            <div class="summary-cards">
+                <div class="summary-card critical">
+                    <div class="card-icon"><i class="fas fa-exclamation-circle"></i></div>
+                    <div class="card-content">
+                        <h3 id="critical-count">0</h3>
+                        <p data-i18n="critical">Critical</p>
+                    </div>
+                </div>
+                <div class="summary-card high">
+                    <div class="card-icon"><i class="fas fa-exclamation-triangle"></i></div>
+                    <div class="card-content">
+                        <h3 id="high-count">0</h3>
+                        <p data-i18n="high">High</p>
+                    </div>
+                </div>
+                <div class="summary-card medium">
+                    <div class="card-icon"><i class="fas fa-info-circle"></i></div>
+                    <div class="card-content">
+                        <h3 id="medium-count">0</h3>
+                        <p data-i18n="medium">Medium</p>
+                    </div>
+                </div>
+                <div class="summary-card low">
+                    <div class="card-icon"><i class="fas fa-check-circle"></i></div>
+                    <div class="card-content">
+                        <h3 id="low-count">0</h3>
+                        <p data-i18n="low">Low</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Findings by Category -->
+            <div class="findings-container">
+                <!-- Critical Findings -->
+                <div class="findings-section">
+                    <h3 class="section-title critical-bg">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <span data-i18n="critical">Critical</span>
+                        <span class="badge" id="critical-badge">0</span>
+                    </h3>
+                    <div id="critical-findings" class="findings-list"></div>
+                </div>
+
+                <!-- High Findings -->
+                <div class="findings-section">
+                    <h3 class="section-title high-bg">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <span data-i18n="high">High</span>
+                        <span class="badge" id="high-badge">0</span>
+                    </h3>
+                    <div id="high-findings" class="findings-list"></div>
+                </div>
+
+                <!-- Medium Findings -->
+                <div class="findings-section">
+                    <h3 class="section-title medium-bg">
+                        <i class="fas fa-info-circle"></i>
+                        <span data-i18n="medium">Medium</span>
+                        <span class="badge" id="medium-badge">0</span>
+                    </h3>
+                    <div id="medium-findings" class="findings-list"></div>
+                </div>
+
+                <!-- Low Findings -->
+                <div class="findings-section">
+                    <h3 class="section-title low-bg">
+                        <i class="fas fa-check-circle"></i>
+                        <span data-i18n="low">Low</span>
+                        <span class="badge" id="low-badge">0</span>
+                    </h3>
+                    <div id="low-findings" class="findings-list"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Configuration Page -->
+        <div id="page-configuration" class="page">
+            <h2 data-i18n="configuration">Configuration</h2>
+
+            <div class="config-container">
+                <!-- OPNsense Configuration -->
+                <div class="config-section">
+                    <h3 data-i18n="opnsense_config">OPNsense Configuration</h3>
+                    <form id="opnsense-config-form">
+                        <div class="form-group">
+                            <label for="opnsense-host" data-i18n="host">Host</label>
+                            <input type="text" id="opnsense-host" placeholder="192.168.1.1">
+                        </div>
+                        <div class="form-group">
+                            <label for="api-key" data-i18n="api_key">API Key</label>
+                            <input type="text" id="api-key" placeholder="">
+                        </div>
+                        <div class="form-group">
+                            <label for="api-secret" data-i18n="api_secret">API Secret</label>
+                            <input type="password" id="api-secret" placeholder="">
+                        </div>
+                        <div class="form-group">
+                            <label for="scan-network" data-i18n="scan_network">Scan Network</label>
+                            <input type="text" id="scan-network" placeholder="192.168.1.0/24">
+                        </div>
+                        <div class="form-group">
+                            <label for="additional-networks" data-i18n="additional_networks">Additional Networks</label>
+                            <input type="text" id="additional-networks" placeholder="192.168.2.0/24,10.0.0.0/24">
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Scan Options -->
+                <div class="config-section">
+                    <h3 data-i18n="scan_options">Scan Options</h3>
+                    <form id="scan-options-form">
+                        <div class="form-group checkbox">
+                            <input type="checkbox" id="aggressive-scan">
+                            <label for="aggressive-scan" data-i18n="aggressive_scan">Aggressive Scan</label>
+                        </div>
+                        <div class="form-group">
+                            <label for="port-scan-timeout" data-i18n="port_scan_timeout">Port Scan Timeout (s)</label>
+                            <input type="number" id="port-scan-timeout" value="300">
+                        </div>
+                        <div class="form-group">
+                            <label for="max-parallel-scans" data-i18n="max_parallel_scans">Max Parallel Scans</label>
+                            <input type="number" id="max-parallel-scans" value="10">
+                        </div>
+                        <div class="form-group checkbox">
+                            <input type="checkbox" id="enable-vulnerability-scan" checked>
+                            <label for="enable-vulnerability-scan" data-i18n="enable_vulnerability_scan">Enable CVE Scanning</label>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="config-actions">
+                    <button id="save-config-btn" class="btn btn-primary">
+                        <i class="fas fa-save"></i>
+                        <span data-i18n="save">Save</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reports Page -->
+        <div id="page-reports" class="page">
+            <h2 data-i18n="reports">Reports</h2>
+            <div id="reports-list" class="reports-container"></div>
+        </div>
+
+        <!-- Ignore List Page -->
+        <div id="page-ignore-list" class="page">
+            <h2 data-i18n="ignore_list">Ignore List</h2>
+            <div class="ignore-list-container">
+                <div class="ignore-section">
+                    <h3 data-i18n="port">Ports</h3>
+                    <div id="ignore-ports-list"></div>
+                </div>
+                <div class="ignore-section">
+                    <h3>Firewall Rules</h3>
+                    <div id="ignore-firewall-list"></div>
+                </div>
+                <div class="ignore-section">
+                    <h3>DNS</h3>
+                    <div id="ignore-dns-list"></div>
+                </div>
+                <div class="ignore-section">
+                    <h3>Hosts</h3>
+                    <div id="ignore-hosts-list"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
