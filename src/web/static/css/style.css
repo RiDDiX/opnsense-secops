@@ -1362,3 +1362,62 @@ body {
 .steps-list li:last-child {
     margin-bottom: 0;
 }
+
+/* Scan Console */
+.scan-console {
+    margin-top: 1rem;
+    border: 1px solid #2c3e50;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #1e1e1e;
+}
+
+.console-header {
+    padding: 0.5rem 1rem;
+    background: #2c3e50;
+    color: #ecf0f1;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.console-header i {
+    margin-right: 0.5rem;
+}
+
+.console-output {
+    height: 200px;
+    overflow-y: auto;
+    padding: 0.75rem;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: #00ff00;
+    background: #1e1e1e;
+}
+
+.console-line {
+    margin-bottom: 0.25rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.console-line.info {
+    color: #3498db;
+}
+
+.console-line.success {
+    color: #2ecc71;
+}
+
+.console-line.warning {
+    color: #f39c12;
+}
+
+.console-line.error {
+    color: #e74c3c;
+}
+
+.console-line .timestamp {
+    color: #7f8c8d;
+    margin-right: 0.5rem;
+}

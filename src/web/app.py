@@ -30,6 +30,7 @@ class ScanManager:
         self.completed_at = None
         self.error = None
         self.cancel_requested = False
+        self.logs = []  # Console log messages
         self.lock = threading.Lock()
     
     def start(self):
@@ -42,15 +43,36 @@ class ScanManager:
             self.completed_at = None
             self.error = None
             self.cancel_requested = False
+            self.logs = []
+            self._add_log('info', 'Security scan started')
+    
+    def _add_log(self, level: str, message: str):
+        """Add a log message (must be called with lock held or from within locked method)"""
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        self.logs.append({
+            'timestamp': timestamp,
+            'level': level,
+            'message': message
+        })
+        # Keep only last 100 messages
+        if len(self.logs) > 100:
+            self.logs = self.logs[-100:]
+    
+    def log(self, level: str, message: str):
+        """Add a log message (thread-safe)"""
+        with self.lock:
+            self._add_log(level, message)
     
     def update(self, step_name: str, step_number: int):
         with self.lock:
             if self.cancel_requested:
                 self.status = 'cancelled'
+                self._add_log('warning', 'Scan cancelled by user')
                 return False
             self.current_step = step_name
             self.step_number = step_number
             self.progress = int((step_number / self.total_steps) * 100)
+            self._add_log('info', f'Step {step_number}/{self.total_steps}: {step_name}')
             return True
     
     def complete(self):
@@ -59,18 +81,21 @@ class ScanManager:
             self.progress = 100
             self.current_step = 'Scan completed'
             self.completed_at = datetime.now().isoformat()
+            self._add_log('success', 'Security scan completed successfully')
     
     def fail(self, error: str):
         with self.lock:
             self.status = 'failed'
             self.error = error
             self.completed_at = datetime.now().isoformat()
+            self._add_log('error', f'Scan failed: {error}')
     
     def cancel(self):
         with self.lock:
             self.cancel_requested = True
             if self.status == 'running':
                 self.status = 'cancelling'
+                self._add_log('warning', 'Cancellation requested...')
     
     def get_status(self):
         with self.lock:
@@ -82,7 +107,8 @@ class ScanManager:
                 'total_steps': self.total_steps,
                 'started_at': self.started_at,
                 'completed_at': self.completed_at,
-                'error': self.error
+                'error': self.error,
+                'logs': self.logs.copy()
             }
     
     def is_cancelled(self):

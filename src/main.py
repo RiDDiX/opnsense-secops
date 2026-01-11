@@ -187,6 +187,12 @@ class SecurityAuditor:
             return self.scan_manager.update(step_name, step_number)
         return True
 
+    def _log(self, level: str, message: str):
+        """Log message to scan_manager console"""
+        if hasattr(self, 'scan_manager') and self.scan_manager:
+            self.scan_manager.log(level, message)
+        logger.info(message)
+
     def _is_cancelled(self) -> bool:
         """Check if scan was cancelled"""
         if hasattr(self, 'scan_manager') and self.scan_manager:
@@ -264,39 +270,57 @@ class SecurityAuditor:
         if not self._update_progress('Collecting data from OPNsense...', 4):
             return results
         
-        logger.info("Collecting data from OPNsense...")
+        self._log('info', 'Connecting to OPNsense API...')
         firewall_rules = self.client.get_firewall_rules()
+        self._log('info', f'Retrieved {len(firewall_rules)} firewall rules')
+        
         nat_rules = self.client.get_nat_rules()
+        self._log('info', f'Retrieved {len(nat_rules)} NAT rules')
+        
         vlans = self.client.get_vlans()
+        self._log('info', f'Retrieved {len(vlans)} VLANs')
+        
         interfaces = self.client.get_interfaces()
+        self._log('info', f'Retrieved {len(interfaces)} interfaces')
+        
         dns_config = self.client.get_dns_config()
+        self._log('info', 'Retrieved DNS configuration')
+        
         dhcp_leases = self.client.get_dhcp_leases()
+        self._log('info', f'Retrieved {len(dhcp_leases)} DHCP leases')
+        
         arp_table = self.client.get_arp_table()
-
-        logger.info(f"Retrieved {len(firewall_rules)} firewall rules")
-        logger.info(f"Retrieved {len(nat_rules)} NAT rules")
-        logger.info(f"Retrieved {len(vlans)} VLANs")
+        self._log('info', f'Retrieved {len(arp_table)} ARP entries')
 
         if self._is_cancelled():
             return results
 
         # Analyze Firewall Rules
-        logger.info("Analyzing firewall rules...")
+        self._log('info', 'Analyzing firewall rules...')
         firewall_findings = self.firewall_analyzer.analyze(firewall_rules, nat_rules)
         results["firewall_findings"] = [asdict(f) for f in firewall_findings]
-        logger.info(f"Found {len(firewall_findings)} firewall issues")
+        if firewall_findings:
+            self._log('warning', f'Found {len(firewall_findings)} firewall issues')
+        else:
+            self._log('success', 'No firewall issues found')
 
         # Analyze DNS Configuration
-        logger.info("Analyzing DNS configuration...")
+        self._log('info', 'Analyzing DNS configuration...')
         dns_findings = self.dns_analyzer.analyze(dns_config, self.opnsense_host)
         results["dns_findings"] = [asdict(f) for f in dns_findings]
-        logger.info(f"Found {len(dns_findings)} DNS issues")
+        if dns_findings:
+            self._log('warning', f'Found {len(dns_findings)} DNS issues')
+        else:
+            self._log('success', 'No DNS issues found')
 
         # Analyze VLANs
-        logger.info("Analyzing VLAN configuration...")
+        self._log('info', 'Analyzing VLAN configuration...')
         vlan_findings = self.vlan_analyzer.analyze(vlans, interfaces, firewall_rules)
         results["vlan_findings"] = [asdict(f) for f in vlan_findings]
-        logger.info(f"Found {len(vlan_findings)} VLAN issues")
+        if vlan_findings:
+            self._log('warning', f'Found {len(vlan_findings)} VLAN issues')
+        else:
+            self._log('success', 'No VLAN issues found')
 
         if self._is_cancelled():
             return results
@@ -305,12 +329,13 @@ class SecurityAuditor:
         if not self._update_progress('Discovering network devices...', 5):
             return results
         
-        logger.info("Starting network discovery...")
+        self._log('info', 'Starting network discovery...')
         networks = self._get_scan_networks()
+        self._log('info', f'Scanning {len(networks)} networks: {", ".join(networks[:3])}{"..." if len(networks) > 3 else ""}')
 
         devices = self.network_discovery.discover_network(networks, dhcp_leases, arp_table, vlans)
         results["devices"] = [asdict(d) for d in devices]
-        logger.info(f"Discovered {len(devices)} devices")
+        self._log('success', f'Discovered {len(devices)} devices')
 
         # Generate network map
         results["network_map"] = self.network_discovery.generate_network_map(devices)
@@ -323,27 +348,33 @@ class SecurityAuditor:
         if not self._update_progress('Checking WAN-exposed ports...', 6):
             return results
         
-        logger.info("Checking for WAN-exposed ports via NAT rules...")
+        self._log('info', 'Analyzing NAT rules for WAN-exposed ports...')
         
         # Get WAN-exposed ports from NAT rules - these are the security concerns
         wan_exposed_ports = self._get_wan_exposed_ports(nat_rules)
-        logger.info(f"Found {len(wan_exposed_ports)} WAN-exposed port forwards")
+        self._log('info', f'Found {len(wan_exposed_ports)} WAN-exposed port forwards')
         
         # Only scan and report ports that are exposed to WAN
         port_findings = self.port_scanner.scan_wan_exposed(wan_exposed_ports)
         results["port_findings"] = [asdict(f) for f in port_findings]
         results["wan_exposed_ports"] = wan_exposed_ports
-        logger.info(f"Found {len(port_findings)} WAN-exposed port security issues")
+        if port_findings:
+            self._log('warning', f'Found {len(port_findings)} WAN-exposed port security issues')
+        else:
+            self._log('success', 'No critical WAN-exposed ports found')
 
         # System Security Analysis
-        logger.info("Analyzing system security configuration...")
+        self._log('info', 'Analyzing system security configuration...')
         system_config = self.client.get_system_config()
         system_findings = self.system_security_analyzer.analyze(system_config)
         results["system_findings"] = [asdict(f) for f in system_findings]
-        logger.info(f"Found {len(system_findings)} system security issues")
+        if system_findings:
+            self._log('warning', f'Found {len(system_findings)} system security issues')
+        else:
+            self._log('success', 'System security configuration OK')
 
         # Vulnerability Scanning
-        logger.info("Scanning for known vulnerabilities...")
+        self._log('info', 'Scanning for known vulnerabilities...')
 
         # Build service map from discovered devices
         service_map = {}

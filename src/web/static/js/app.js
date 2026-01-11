@@ -140,6 +140,9 @@ function showScanProgress() {
     document.getElementById('scan-progress-overlay').classList.remove('hidden');
     document.getElementById('scan-status-indicator').className = 'status-running';
     document.getElementById('scan-status-text').textContent = 'Running';
+    // Clear console and reset log counter
+    document.getElementById('scan-console-output').innerHTML = '';
+    lastLogCount = 0;
 }
 
 function hideScanProgress() {
@@ -152,6 +155,11 @@ function updateProgressUI(status) {
     document.getElementById('progress-step').textContent = status.current_step || 'Processing...';
     document.getElementById('step-current').textContent = status.step_number || 0;
     document.getElementById('step-total').textContent = status.total_steps || 7;
+    
+    // Update console output
+    if (status.logs && status.logs.length > 0) {
+        updateConsoleOutput(status.logs);
+    }
     
     // Update status indicator
     const indicator = document.getElementById('scan-status-indicator');
@@ -222,6 +230,33 @@ function startProgressPolling() {
             console.error('Failed to poll scan status:', e);
         }
     }, 1000);
+}
+
+let lastLogCount = 0;
+
+function updateConsoleOutput(logs) {
+    const consoleOutput = document.getElementById('scan-console-output');
+    
+    // Only add new logs
+    if (logs.length > lastLogCount) {
+        const newLogs = logs.slice(lastLogCount);
+        newLogs.forEach(log => {
+            const line = document.createElement('div');
+            line.className = `console-line ${log.level}`;
+            line.innerHTML = `<span class="timestamp">[${log.timestamp}]</span> ${escapeHtml(log.message)}`;
+            consoleOutput.appendChild(line);
+        });
+        lastLogCount = logs.length;
+        
+        // Auto-scroll to bottom
+        consoleOutput.scrollTop = consoleOutput.scrollHeight;
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 async function cancelScan() {
