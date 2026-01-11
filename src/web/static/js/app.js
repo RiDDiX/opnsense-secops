@@ -82,10 +82,10 @@ async function loadConfig() {
     const data = await response.json();
     if (data.success) {
         document.getElementById('opnsense-host').value = data.opnsense.host || '';
-        document.getElementById('scan-network').value = data.opnsense.scan_network || '';
-        document.getElementById('additional-networks').value = data.opnsense.additional_networks || '';
+        document.getElementById('api-key').value = data.opnsense.api_key || '';
+        document.getElementById('api-secret').value = data.opnsense.api_secret || '';
 
-        const opts = data.scan_options;
+        const opts = data.scan_options || {};
         document.getElementById('aggressive-scan').checked = opts.aggressive_scan || false;
         document.getElementById('port-scan-timeout').value = opts.port_scan_timeout || 300;
         document.getElementById('max-parallel-scans').value = opts.max_parallel_scans || 10;
@@ -97,8 +97,8 @@ async function saveConfig() {
     const config = {
         opnsense: {
             host: document.getElementById('opnsense-host').value,
-            scan_network: document.getElementById('scan-network').value,
-            additional_networks: document.getElementById('additional-networks').value
+            api_key: document.getElementById('api-key').value,
+            api_secret: document.getElementById('api-secret').value
         },
         exceptions: {
             scan_options: {
@@ -312,10 +312,35 @@ function displayFindings(report) {
 }
 
 function createFindingHTML(finding, severity) {
+    const interfaceTag = finding.interface ? 
+        `<span class="interface-tag">${finding.interface}</span>` : '';
+    
+    const pathInfo = finding.opnsense_path ? 
+        `<div class="detail-row path-row">
+            <span class="detail-label">📍 OPNsense:</span>
+            <span class="detail-value path-value">${finding.opnsense_path}</span>
+        </div>` : '';
+    
+    const stepsHtml = finding.implementation_steps && finding.implementation_steps.length > 0 ?
+        `<div class="implementation-steps">
+            <div class="steps-header" onclick="toggleSteps(this)">
+                <strong>📋 Implementierung anzeigen</strong>
+                <i class="fas fa-chevron-down"></i>
+            </div>
+            <div class="steps-content hidden">
+                <ol class="steps-list">
+                    ${finding.implementation_steps.map(step => `<li>${step}</li>`).join('')}
+                </ol>
+            </div>
+        </div>` : '';
+    
     return `
         <div class="finding-item">
             <div class="finding-header">
-                <div class="finding-title">${finding.issue || finding.title || 'Issue'}</div>
+                <div class="finding-title">
+                    ${interfaceTag}
+                    ${finding.issue || finding.title || 'Issue'}
+                </div>
                 <div class="finding-actions">
                     <button class="btn btn-small" onclick="addToIgnore(${JSON.stringify(finding).replace(/"/g, '&quot;')})">
                         ${t('add_to_ignore')}
@@ -323,6 +348,7 @@ function createFindingHTML(finding, severity) {
                 </div>
             </div>
             <div class="finding-details">
+                ${pathInfo}
                 <div class="detail-row">
                     <span class="detail-label">${t('reason')}:</span>
                     <span class="detail-value">${finding.reason || finding.description || ''}</span>
@@ -338,8 +364,17 @@ function createFindingHTML(finding, severity) {
                 <strong>💡 ${t('solution')}:</strong>
                 ${finding.solution}
             </div>` : ''}
+            ${stepsHtml}
         </div>
     `;
+}
+
+function toggleSteps(element) {
+    const content = element.nextElementSibling;
+    const icon = element.querySelector('i');
+    content.classList.toggle('hidden');
+    icon.classList.toggle('fa-chevron-down');
+    icon.classList.toggle('fa-chevron-up');
 }
 
 function displayReportsList(reports) {

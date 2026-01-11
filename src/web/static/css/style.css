@@ -1266,3 +1266,73 @@ body {
     background: #fdeaea;
     color: #c0392b;
 }
+
+/* Interface tags and implementation steps */
+.interface-tag {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    background: #3498db;
+    color: white;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-right: 0.5rem;
+    text-transform: uppercase;
+}
+
+.path-row .path-value {
+    font-family: monospace;
+    background: #f0f0f0;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+}
+
+.implementation-steps {
+    margin-top: 1rem;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.steps-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background: #f8f9fa;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.steps-header:hover {
+    background: #e9ecef;
+}
+
+.steps-header strong {
+    color: #2c3e50;
+}
+
+.steps-content {
+    padding: 1rem;
+    background: white;
+}
+
+.steps-content.hidden {
+    display: none;
+}
+
+.steps-list {
+    margin: 0;
+    padding-left: 1.5rem;
+}
+
+.steps-list li {
+    margin-bottom: 0.5rem;
+    line-height: 1.5;
+    color: #34495e;
+}
+
+.steps-list li:last-child {
+    margin-bottom: 0;
+}

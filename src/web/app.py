@@ -117,6 +117,34 @@ def index():
     return render_template('index.html')
 
 
+def load_persistent_config():
+    """Load persistent configuration from file, set environment variables"""
+    config_file = os.path.join(CONFIG_DIR, 'opnsense.json')
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+            # Set environment variables from saved config
+            if config.get('host'):
+                os.environ['OPNSENSE_HOST'] = config['host']
+            if config.get('api_key'):
+                os.environ['OPNSENSE_API_KEY'] = config['api_key']
+            if config.get('api_secret'):
+                os.environ['OPNSENSE_API_SECRET'] = config['api_secret']
+            if config.get('scan_network'):
+                os.environ['SCAN_NETWORK'] = config['scan_network']
+            if config.get('additional_networks'):
+                os.environ['ADDITIONAL_NETWORKS'] = config['additional_networks']
+            logger.info("Loaded persistent configuration from opnsense.json")
+            return config
+        except Exception as e:
+            logger.error(f"Failed to load persistent config: {e}")
+    return {}
+
+# Load persistent config at startup
+_persistent_config = load_persistent_config()
+
+
 @app.route('/api/config', methods=['GET'])
 def get_config():
     """Get current configuration"""
@@ -124,11 +152,19 @@ def get_config():
         config_loader = ConfigLoader(CONFIG_DIR)
         rules, exceptions = config_loader.load_all()
 
-        # Get environment variables
+        # Load from persistent file first, then environment variables as fallback
+        config_file = os.path.join(CONFIG_DIR, 'opnsense.json')
+        saved_config = {}
+        if os.path.exists(config_file):
+            with open(config_file, 'r') as f:
+                saved_config = json.load(f)
+
         opnsense_config = {
-            'host': os.getenv('OPNSENSE_HOST', ''),
-            'scan_network': os.getenv('SCAN_NETWORK', '192.168.1.0/24'),
-            'additional_networks': os.getenv('ADDITIONAL_NETWORKS', '')
+            'host': saved_config.get('host') or os.getenv('OPNSENSE_HOST', ''),
+            'api_key': saved_config.get('api_key') or os.getenv('OPNSENSE_API_KEY', ''),
+            'api_secret': saved_config.get('api_secret') or os.getenv('OPNSENSE_API_SECRET', ''),
+            'scan_network': saved_config.get('scan_network') or os.getenv('SCAN_NETWORK', '192.168.1.0/24'),
+            'additional_networks': saved_config.get('additional_networks') or os.getenv('ADDITIONAL_NETWORKS', '')
         }
 
         return jsonify({
@@ -145,15 +181,27 @@ def get_config():
 
 @app.route('/api/config', methods=['POST'])
 def save_config():
-    """Save configuration"""
+    """Save configuration persistently"""
     try:
         data = request.json
+        opnsense_data = data.get('opnsense', {})
 
-        # Save OPNsense config to environment (would need .env update in production)
-        # For now, we'll save to a temporary config file
+        # Save OPNsense config to persistent file
         config_file = os.path.join(CONFIG_DIR, 'opnsense.json')
         with open(config_file, 'w') as f:
-            json.dump(data.get('opnsense', {}), f, indent=2)
+            json.dump(opnsense_data, f, indent=2)
+
+        # Update environment variables immediately
+        if opnsense_data.get('host'):
+            os.environ['OPNSENSE_HOST'] = opnsense_data['host']
+        if opnsense_data.get('api_key'):
+            os.environ['OPNSENSE_API_KEY'] = opnsense_data['api_key']
+        if opnsense_data.get('api_secret'):
+            os.environ['OPNSENSE_API_SECRET'] = opnsense_data['api_secret']
+        if opnsense_data.get('scan_network'):
+            os.environ['SCAN_NETWORK'] = opnsense_data['scan_network']
+        if opnsense_data.get('additional_networks'):
+            os.environ['ADDITIONAL_NETWORKS'] = opnsense_data['additional_networks']
 
         # Save exceptions
         if 'exceptions' in data:
@@ -162,6 +210,7 @@ def save_config():
             with open(exceptions_file, 'w') as f:
                 yaml.dump(data['exceptions'], f, default_flow_style=False)
 
+        logger.info("Configuration saved persistently")
         return jsonify({'success': True, 'message': 'Configuration saved'})
     except Exception as e:
         logger.error(f"Failed to save config: {e}")
@@ -688,14 +737,19 @@ def fetch_networks_from_opnsense():
                 if not isinstance(iface_data, dict):
                     continue
                 
+                # Skip loopback and other system interfaces
+                if iface_name in ['lo0', 'pflog0', 'pfsync0', 'enc0']:
+                    continue
+                
                 descr = iface_data.get('descr', iface_name)
                 is_wan = 'wan' in descr.lower() or 'pppoe' in descr.lower() or iface_name.lower() == 'wan'
                 
-                # Get IPv4 address
-                ipv4 = iface_data.get('ipv4', [])
+                # Get IPv4 address - handle multiple formats
                 network_str = None
                 gateway = iface_data.get('gateway', '')
                 
+                # Format 1: ipv4 as list of dicts
+                ipv4 = iface_data.get('ipv4', [])
                 if ipv4 and isinstance(ipv4, list):
                     for addr_info in ipv4:
                         if isinstance(addr_info, dict):
@@ -705,25 +759,49 @@ def fetch_networks_from_opnsense():
                                 try:
                                     net = ipaddress.ip_network(f"{addr}/{subnet}", strict=False)
                                     network_str = str(net)
-                                    # Auto-detect WAN: public IP or has gateway
                                     if not net.is_private:
                                         is_wan = True
                                 except:
                                     pass
                 
-                # Skip if no network info
-                if not network_str and not gateway:
-                    continue
+                # Format 2: Direct ipaddr field
+                if not network_str:
+                    addr = iface_data.get('ipaddr', '')
+                    subnet = iface_data.get('subnet', '24')
+                    if addr and not addr.startswith('127.'):
+                        try:
+                            net = ipaddress.ip_network(f"{addr}/{subnet}", strict=False)
+                            network_str = str(net)
+                            if not net.is_private:
+                                is_wan = True
+                        except:
+                            pass
                 
-                networks.append({
-                    'name': descr,
-                    'interface': iface_name,
-                    'network': network_str,
-                    'gateway': gateway,
-                    'type': 'wan' if is_wan else 'lan',
-                    'vlan_tag': None,
-                    'enabled': iface_data.get('enable', '1') == '1'
-                })
+                # Format 3: Check for 'addr' in status
+                if not network_str and 'status' in iface_data:
+                    status = iface_data.get('status', {})
+                    if isinstance(status, dict):
+                        addr = status.get('ipaddr', '')
+                        subnet = status.get('subnet', '24')
+                        if addr:
+                            try:
+                                net = ipaddress.ip_network(f"{addr}/{subnet}", strict=False)
+                                network_str = str(net)
+                            except:
+                                pass
+                
+                # Include all enabled interfaces (not just those with IP)
+                is_enabled = iface_data.get('enable', iface_data.get('enabled', '1'))
+                if is_enabled in ['1', 1, True, 'true']:
+                    networks.append({
+                        'name': descr or iface_name,
+                        'interface': iface_name,
+                        'network': network_str,
+                        'gateway': gateway,
+                        'type': 'wan' if is_wan else 'lan',
+                        'vlan_tag': None,
+                        'enabled': True
+                    })
         
         # Add VLANs
         for vlan in vlans:
@@ -769,6 +847,9 @@ def start_internal_scan():
     def run_internal_scan():
         global internal_scan_state
         try:
+            import ipaddress
+            import nmap
+            
             internal_scan_state['status'] = 'running'
             internal_scan_state['current_step'] = 'Initializing...'
             internal_scan_state['devices'] = []
@@ -791,17 +872,7 @@ def start_internal_scan():
                 scan_net = os.getenv('SCAN_NETWORK', '192.168.1.0/24')
                 networks_to_scan = [scan_net]
             
-            internal_scan_state['current_step'] = f'Scanning {len(networks_to_scan)} networks...'
-            
-            # Initialize components
-            config_loader = ConfigLoader(CONFIG_DIR)
-            rules, exceptions = config_loader.load_all()
-            scan_options = config_loader.get_scan_options()
-            
-            from src.analyzers.network_discovery import NetworkDiscovery
-            discovery = NetworkDiscovery(scan_options)
-            
-            internal_scan_state['current_step'] = 'Discovering devices...'
+            internal_scan_state['current_step'] = f'Discovering hosts in {len(networks_to_scan)} networks...'
             
             # Get DHCP/ARP data if possible
             dhcp_leases = []
@@ -817,24 +888,93 @@ def start_internal_scan():
             except:
                 pass
             
-            # Discover devices
-            devices = discovery.discover_network(networks_to_scan, dhcp_leases, arp_table, [])
+            # Helper to check if IP is private
+            def is_private_ip(ip_str):
+                try:
+                    ip = ipaddress.ip_address(ip_str)
+                    return ip.is_private and not ip.is_loopback
+                except:
+                    return False
+            
+            # Collect all known hosts from DHCP and ARP
+            known_hosts = {}
+            for lease in dhcp_leases:
+                ip = lease.get('address', lease.get('ip', ''))
+                if ip and is_private_ip(ip):
+                    known_hosts[ip] = {
+                        'mac': lease.get('mac', ''),
+                        'hostname': lease.get('hostname', ''),
+                        'status': 'active' if lease.get('state') == 'active' else 'inactive'
+                    }
+            
+            for arp in arp_table:
+                ip = arp.get('ip', '')
+                if ip and is_private_ip(ip):
+                    if ip not in known_hosts:
+                        known_hosts[ip] = {}
+                    known_hosts[ip]['mac'] = arp.get('mac', known_hosts.get(ip, {}).get('mac', ''))
+                    known_hosts[ip]['status'] = 'active'
+            
+            # Use nmap to discover live hosts and scan ALL ports
+            nm = nmap.PortScanner()
+            devices = []
+            
+            for network in networks_to_scan:
+                internal_scan_state['current_step'] = f'Host discovery: {network}'
+                
+                # First find live hosts with ping scan
+                try:
+                    nm.scan(hosts=network, arguments='-sn')
+                    live_hosts = [h for h in nm.all_hosts() if is_private_ip(h)]
+                except Exception as e:
+                    logger.error(f"Host discovery failed for {network}: {e}")
+                    continue
+                
+                # Full port scan on each live host (1-65535)
+                for i, host_ip in enumerate(live_hosts):
+                    internal_scan_state['current_step'] = f'Scanning ports on {host_ip} ({i+1}/{len(live_hosts)})'
+                    
+                    host_info = known_hosts.get(host_ip, {})
+                    device = {
+                        'ip': host_ip,
+                        'mac': host_info.get('mac', ''),
+                        'hostname': host_info.get('hostname', ''),
+                        'network': network,
+                        'vlan': '',
+                        'status': 'active',
+                        'open_ports': [],
+                        'services': {}
+                    }
+                    
+                    try:
+                        # Full port scan (1-65535) with service detection
+                        nm.scan(hosts=host_ip, arguments='-sS -p 1-65535 --min-rate=1000 -T4')
+                        
+                        if host_ip in nm.all_hosts():
+                            # Get hostname from scan if not known
+                            if not device['hostname'] and 'hostnames' in nm[host_ip]:
+                                for h in nm[host_ip]['hostnames']:
+                                    if h.get('name'):
+                                        device['hostname'] = h['name']
+                                        break
+                            
+                            # Get MAC from scan if not known
+                            if not device['mac'] and 'addresses' in nm[host_ip]:
+                                device['mac'] = nm[host_ip]['addresses'].get('mac', '')
+                            
+                            # Get open ports
+                            if 'tcp' in nm[host_ip]:
+                                for port, port_info in nm[host_ip]['tcp'].items():
+                                    if port_info['state'] == 'open':
+                                        device['open_ports'].append(port)
+                                        device['services'][port] = port_info.get('name', 'unknown')
+                    except Exception as e:
+                        logger.error(f"Port scan failed for {host_ip}: {e}")
+                    
+                    devices.append(device)
             
             internal_scan_state['current_step'] = 'Scan completed'
-            internal_scan_state['devices'] = [
-                {
-                    'ip': d.ip,
-                    'mac': d.mac,
-                    'hostname': d.hostname,
-                    'vendor': d.vendor,
-                    'network': d.network,
-                    'vlan': d.vlan,
-                    'status': d.status,
-                    'open_ports': d.open_ports,
-                    'services': d.services,
-                    'os_guess': d.os_guess
-                } for d in devices
-            ]
+            internal_scan_state['devices'] = devices  # Already dicts
             internal_scan_state['status'] = 'completed'
             
         except Exception as e:
