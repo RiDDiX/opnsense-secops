@@ -10,12 +10,9 @@ from flask_cors import CORS
 from datetime import datetime
 import sys
 
-# Add parent directory to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from config_loader import ConfigLoader
-from opnsense_client import OPNsenseClient
-from main import SecurityAuditor
+from src.config_loader import ConfigLoader
+from src.opnsense_client import OPNsenseClient
+from src.main import SecurityAuditor
 
 app = Flask(__name__)
 CORS(app)
@@ -341,7 +338,7 @@ def get_translations(lang):
 def get_optimal_config():
     """Get optimal security configuration recommendations"""
     try:
-        from analyzers.optimal_config_generator import OptimalConfigGenerator
+        from src.analyzers.optimal_config_generator import OptimalConfigGenerator
         generator = OptimalConfigGenerator()
         
         # Get latest report if available

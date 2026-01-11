@@ -8,17 +8,17 @@ import logging
 from typing import Dict, List
 from dataclasses import asdict
 
-from opnsense_client import OPNsenseClient
-from config_loader import ConfigLoader
-from report_generator import ReportGenerator
-from analyzers.firewall_analyzer import FirewallAnalyzer
-from analyzers.port_scanner import PortScanner
-from analyzers.dns_analyzer import DNSAnalyzer
-from analyzers.vlan_analyzer import VLANAnalyzer
-from analyzers.network_discovery import NetworkDiscovery
-from analyzers.vulnerability_scanner import VulnerabilityScanner
-from analyzers.system_security_analyzer import SystemSecurityAnalyzer
-from analyzers.optimal_config_generator import OptimalConfigGenerator
+from src.opnsense_client import OPNsenseClient
+from src.config_loader import ConfigLoader
+from src.report_generator import ReportGenerator
+from src.analyzers.firewall_analyzer import FirewallAnalyzer
+from src.analyzers.port_scanner import PortScanner
+from src.analyzers.dns_analyzer import DNSAnalyzer
+from src.analyzers.vlan_analyzer import VLANAnalyzer
+from src.analyzers.network_discovery import NetworkDiscovery
+from src.analyzers.vulnerability_scanner import VulnerabilityScanner
+from src.analyzers.system_security_analyzer import SystemSecurityAnalyzer
+from src.analyzers.optimal_config_generator import OptimalConfigGenerator
 
 # Configure logging
 logging.basicConfig(
