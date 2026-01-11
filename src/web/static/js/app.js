@@ -672,13 +672,17 @@ function displayNetworksList(networks) {
     const container = document.getElementById('networks-list');
     
     const html = networks.map((net, idx) => {
-        const typeClass = net.type || '';
+        const typeClass = net.type || 'unset';
         const isVlan = net.vlan_tag ? true : false;
+        const enabledClass = net.enabled ? '' : 'disabled-iface';
         
         return `
-            <div class="network-item ${typeClass}" data-index="${idx}">
+            <div class="network-item ${typeClass} ${enabledClass}" data-index="${idx}">
                 <div class="network-info">
-                    <div class="network-name">${net.name || net.interface}</div>
+                    <div class="network-name">
+                        ${net.name || net.interface}
+                        ${!net.enabled ? '<span class="disabled-badge">Disabled</span>' : ''}
+                    </div>
                     <div class="network-details">
                         <span><i class="fas fa-network-wired"></i> ${net.network || 'N/A'}</span>
                         <span><i class="fas fa-ethernet"></i> ${net.interface}</span>
@@ -687,12 +691,14 @@ function displayNetworksList(networks) {
                     </div>
                 </div>
                 <div class="network-type-selector">
+                    <button class="type-btn ignore ${!net.type ? 'active' : ''}" 
+                            onclick="setNetworkType(${idx}, null)">Ignore</button>
                     <button class="type-btn wan ${net.type === 'wan' ? 'active' : ''}" 
                             onclick="setNetworkType(${idx}, 'wan')">WAN</button>
                     <button class="type-btn lan ${net.type === 'lan' ? 'active' : ''}" 
                             onclick="setNetworkType(${idx}, 'lan')">LAN</button>
-                    ${isVlan ? `<button class="type-btn vlan ${net.type === 'vlan' ? 'active' : ''}" 
-                            onclick="setNetworkType(${idx}, 'vlan')">VLAN</button>` : ''}
+                    <button class="type-btn vlan ${net.type === 'vlan' ? 'active' : ''}" 
+                            onclick="setNetworkType(${idx}, 'vlan')">VLAN</button>
                 </div>
             </div>
         `;

@@ -725,24 +725,46 @@ def fetch_networks_from_opnsense():
         
         client = OPNsenseClient(host, api_key, api_secret)
         
-        # Get interfaces
+        # Get interfaces and VLANs
         interfaces = client.get_interfaces()
         vlans = client.get_vlans()
         
-        networks = []
+        logger.info(f"Fetched interfaces: {list(interfaces.keys()) if isinstance(interfaces, dict) else 'none'}")
+        logger.info(f"Fetched VLANs: {len(vlans) if vlans else 0}")
         
-        # Parse interfaces
+        networks = []
+        vlan_interfaces = set()  # Track VLAN interface names to avoid duplicates
+        
+        # First, collect VLAN interface names
+        for vlan in vlans:
+            vlan_tag = vlan.get('tag', vlan.get('vlanif', ''))
+            parent_if = vlan.get('if', '')
+            if vlan_tag and parent_if:
+                vlan_interfaces.add(f"{parent_if}.{vlan_tag}")
+        
+        # Parse ALL interfaces
         if isinstance(interfaces, dict):
             for iface_name, iface_data in interfaces.items():
                 if not isinstance(iface_data, dict):
                     continue
                 
-                # Skip loopback and other system interfaces
+                # Skip loopback and system interfaces
                 if iface_name in ['lo0', 'pflog0', 'pfsync0', 'enc0']:
                     continue
                 
+                # Skip VLAN sub-interfaces (will be added from vlans list)
+                if '.' in iface_name and iface_name in vlan_interfaces:
+                    continue
+                
                 descr = iface_data.get('descr', iface_name)
-                is_wan = 'wan' in descr.lower() or 'pppoe' in descr.lower() or iface_name.lower() == 'wan'
+                
+                # Determine type - only set if clearly identifiable
+                detected_type = None
+                if 'wan' in descr.lower() or 'pppoe' in descr.lower() or iface_name.lower() == 'wan':
+                    detected_type = 'wan'
+                elif 'lan' in descr.lower() or iface_name.lower() == 'lan':
+                    detected_type = 'lan'
+                # Otherwise leave as None - user must choose
                 
                 # Get IPv4 address - handle multiple formats
                 network_str = None
@@ -759,8 +781,9 @@ def fetch_networks_from_opnsense():
                                 try:
                                     net = ipaddress.ip_network(f"{addr}/{subnet}", strict=False)
                                     network_str = str(net)
-                                    if not net.is_private:
-                                        is_wan = True
+                                    # Public IP = likely WAN
+                                    if not net.is_private and detected_type is None:
+                                        detected_type = 'wan'
                                 except:
                                     pass
                 
@@ -772,8 +795,8 @@ def fetch_networks_from_opnsense():
                         try:
                             net = ipaddress.ip_network(f"{addr}/{subnet}", strict=False)
                             network_str = str(net)
-                            if not net.is_private:
-                                is_wan = True
+                            if not net.is_private and detected_type is None:
+                                detected_type = 'wan'
                         except:
                             pass
                 
@@ -790,18 +813,16 @@ def fetch_networks_from_opnsense():
                             except:
                                 pass
                 
-                # Include all enabled interfaces (not just those with IP)
-                is_enabled = iface_data.get('enable', iface_data.get('enabled', '1'))
-                if is_enabled in ['1', 1, True, 'true']:
-                    networks.append({
-                        'name': descr or iface_name,
-                        'interface': iface_name,
-                        'network': network_str,
-                        'gateway': gateway,
-                        'type': 'wan' if is_wan else 'lan',
-                        'vlan_tag': None,
-                        'enabled': True
-                    })
+                # Include ALL interfaces (regardless of enabled status)
+                networks.append({
+                    'name': descr or iface_name,
+                    'interface': iface_name,
+                    'network': network_str,
+                    'gateway': gateway,
+                    'type': detected_type,  # None if not clearly identifiable
+                    'vlan_tag': None,
+                    'enabled': iface_data.get('enable', iface_data.get('enabled', '1')) in ['1', 1, True, 'true']
+                })
         
         # Add VLANs
         for vlan in vlans:
