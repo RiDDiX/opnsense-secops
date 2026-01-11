@@ -106,28 +106,28 @@ class ConfigLoader:
 
     def get_port_exceptions(self) -> List[Dict]:
         """Get port exceptions"""
-        return self.exceptions.get("port_exceptions", [])
+        return self.exceptions.get("port_exceptions") or []
 
     def get_firewall_exceptions(self) -> List[Dict]:
         """Get firewall exceptions"""
-        return self.exceptions.get("firewall_exceptions", [])
+        return self.exceptions.get("firewall_exceptions") or []
 
     def get_dns_exceptions(self) -> List[Dict]:
         """Get DNS exceptions"""
-        return self.exceptions.get("dns_exceptions", [])
+        return self.exceptions.get("dns_exceptions") or []
 
     def get_vlan_exceptions(self) -> List[Dict]:
         """Get VLAN exceptions"""
-        return self.exceptions.get("vlan_exceptions", [])
+        return self.exceptions.get("vlan_exceptions") or []
 
     def get_host_exceptions(self) -> List[str]:
         """Get list of hosts to exclude from scanning"""
-        exceptions = self.exceptions.get("host_exceptions", [])
+        exceptions = self.exceptions.get("host_exceptions") or []
         return [exc.get("ip") for exc in exceptions if exc.get("ip")]
 
     def get_system_exceptions(self) -> List[Dict]:
         """Get system security exceptions"""
-        return self.exceptions.get("system_exceptions", [])
+        return self.exceptions.get("system_exceptions") or []
 
     def validate_config(self) -> List[str]:
         """Validate configuration and return list of warnings"""

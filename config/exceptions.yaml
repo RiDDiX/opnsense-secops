@@ -2,7 +2,7 @@
 # Hier können spezifische Ausnahmen für dein Netzwerk definiert werden
 
 # Port Exceptions - Diese Ports werden nicht als kritisch gemeldet
-port_exceptions:
+port_exceptions: []
   # Beispiel: Homelab Services
   # - port: 8080
   #   host: "192.168.1.100"
@@ -15,23 +15,23 @@ port_exceptions:
   #   reason: "Plex Media Server"
 
 # Firewall Rule Exceptions - Diese Regeln werden nicht als problematisch gemeldet
-firewall_exceptions:
+firewall_exceptions: []
   # - rule_id: "some-rule-uuid"
   #   reason: "Benötigt für spezifischen Service"
 
 # DNS Exceptions
-dns_exceptions:
+dns_exceptions: []
   # - check: "dnssec_enabled"
   #   reason: "ISP unterstützt kein DNSSEC"
 
 # VLAN Exceptions
-vlan_exceptions:
+vlan_exceptions: []
   # - check: "vlan_isolation"
   #   vlans: [10, 20]
   #   reason: "Management und Server müssen kommunizieren"
 
 # Host Exceptions - Hosts die nicht gescannt werden sollen
-host_exceptions:
+host_exceptions: []
   # - ip: "192.168.1.1"
   #   reason: "OPNsense selbst"
   # - ip: "192.168.1.254"
