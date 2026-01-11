@@ -4,7 +4,7 @@ services:
   opnsense-auditor:
     image: ghcr.io/riddix/opnsense-secops:main
     container_name: opnsense-security-auditor
-    network_mode: host
+    network_mode: bridge
     volumes:
       - ./config:/app/config
       - ./reports:/app/reports
