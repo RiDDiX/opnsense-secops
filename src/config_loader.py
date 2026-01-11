@@ -32,7 +32,7 @@ class ConfigLoader:
             with open(rules_file, 'r', encoding='utf-8') as f:
                 rules = yaml.safe_load(f)
                 logger.info(f"Loaded rules from {rules_file}")
-                return rules
+                return rules or self._get_default_rules()
         except FileNotFoundError:
             logger.error(f"Rules file not found: {rules_file}")
             return self._get_default_rules()
@@ -43,18 +43,25 @@ class ConfigLoader:
     def load_exceptions(self) -> Dict:
         """Load exceptions configuration"""
         exceptions_file = os.path.join(self.config_dir, "exceptions.yaml")
+        defaults = self._get_default_exceptions()
 
         try:
             with open(exceptions_file, 'r', encoding='utf-8') as f:
                 exceptions = yaml.safe_load(f)
                 logger.info(f"Loaded exceptions from {exceptions_file}")
+                if not exceptions:
+                    return defaults
+                # Merge with defaults to ensure all keys exist
+                for key, value in defaults.items():
+                    if key not in exceptions:
+                        exceptions[key] = value
                 return exceptions
         except FileNotFoundError:
             logger.warning(f"Exceptions file not found: {exceptions_file}, using defaults")
-            return self._get_default_exceptions()
+            return defaults
         except yaml.YAMLError as e:
             logger.error(f"Error parsing exceptions YAML: {e}")
-            return self._get_default_exceptions()
+            return defaults
 
     def _get_default_rules(self) -> Dict:
         """Get default rules if file not found"""

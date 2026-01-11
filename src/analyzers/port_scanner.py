@@ -45,7 +45,7 @@ class PortScanner:
 
         # Build exception ports map
         self.exception_ports = {}
-        for exc in exceptions:
+        for exc in (exceptions or []):
             port = exc.get("port")
             host = exc.get("host", "*")
             if port:
