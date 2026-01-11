@@ -891,16 +891,44 @@ internal_scan_state = {
     'status': 'idle',
     'current_step': '',
     'devices': [],
-    'error': None
+    'error': None,
+    'started_at': None
 }
+
+INTERNAL_SCAN_TIMEOUT = 1800  # 30 minutes timeout
+
+def is_internal_scan_stuck():
+    """Check if internal scan is stuck (running for too long)"""
+    if internal_scan_state['status'] == 'running' and internal_scan_state.get('started_at'):
+        elapsed = time.time() - internal_scan_state['started_at']
+        return elapsed > INTERNAL_SCAN_TIMEOUT
+    return False
+
+@app.route('/api/scan/internal/cancel', methods=['POST'])
+def cancel_internal_scan():
+    """Cancel/reset internal scan state"""
+    global internal_scan_state
+    internal_scan_state = {
+        'status': 'idle',
+        'current_step': '',
+        'devices': [],
+        'error': None,
+        'started_at': None
+    }
+    return jsonify({'success': True, 'message': 'Internal scan cancelled'})
 
 @app.route('/api/scan/internal', methods=['POST'])
 def start_internal_scan():
     """Start internal network device scan"""
     global internal_scan_state
     
+    # Check for stuck scan and auto-reset
     if internal_scan_state['status'] == 'running':
-        return jsonify({'success': False, 'error': 'Scan already in progress'}), 400
+        if is_internal_scan_stuck():
+            logger.warning("Internal scan was stuck, auto-resetting...")
+            internal_scan_state['status'] = 'idle'
+        else:
+            return jsonify({'success': False, 'error': 'Scan already in progress. Use /api/scan/internal/cancel to force reset.'}), 400
     
     def run_internal_scan():
         global internal_scan_state
@@ -912,6 +940,7 @@ def start_internal_scan():
             internal_scan_state['current_step'] = 'Initializing...'
             internal_scan_state['devices'] = []
             internal_scan_state['error'] = None
+            internal_scan_state['started_at'] = time.time()
             
             # Load network config
             config_file = os.path.join(CONFIG_DIR, 'scan_networks.json')
