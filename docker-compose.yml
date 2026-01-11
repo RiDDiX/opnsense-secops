@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   opnsense-auditor:
-    image: ghcr.io/riddix/opnsense-secops:latest
+    image: ghcr.io/riddix/opnsense-secops:main
     container_name: opnsense-security-auditor
     network_mode: host
     volumes:
