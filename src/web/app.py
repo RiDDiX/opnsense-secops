@@ -732,6 +732,10 @@ def fetch_networks_from_opnsense():
         logger.info(f"Fetched interfaces: {list(interfaces.keys()) if isinstance(interfaces, dict) else 'none'}")
         logger.info(f"Fetched VLANs: {len(vlans) if vlans else 0}")
         
+        # Debug: Log raw interface data structure
+        for iface_name, iface_data in interfaces.items():
+            logger.debug(f"Interface {iface_name}: {type(iface_data)} - keys: {list(iface_data.keys()) if isinstance(iface_data, dict) else 'N/A'}")
+        
         networks = []
         vlan_interfaces = set()  # Track VLAN interface names to avoid duplicates
         
@@ -745,7 +749,10 @@ def fetch_networks_from_opnsense():
         # Parse ALL interfaces
         if isinstance(interfaces, dict):
             for iface_name, iface_data in interfaces.items():
-                if not isinstance(iface_data, dict):
+                # Handle case where iface_data is just a string (interface name)
+                if isinstance(iface_data, str):
+                    iface_data = {'descr': iface_data, 'if': iface_name}
+                elif not isinstance(iface_data, dict):
                     continue
                 
                 # Skip loopback and system interfaces
@@ -756,14 +763,18 @@ def fetch_networks_from_opnsense():
                 if '.' in iface_name and iface_name in vlan_interfaces:
                     continue
                 
-                descr = iface_data.get('descr', iface_name)
+                descr = iface_data.get('descr', iface_data.get('description', iface_name))
                 
                 # Determine type - only set if clearly identifiable
                 detected_type = None
-                if 'wan' in descr.lower() or 'pppoe' in descr.lower() or iface_name.lower() == 'wan':
+                name_lower = (descr or iface_name).lower()
+                if 'wan' in name_lower or 'pppoe' in name_lower or iface_name.lower() == 'wan':
                     detected_type = 'wan'
-                elif 'lan' in descr.lower() or iface_name.lower() == 'lan':
+                elif 'lan' in name_lower or iface_name.lower() == 'lan':
                     detected_type = 'lan'
+                elif 'opt' in iface_name.lower():
+                    # OPTx interfaces - user should classify
+                    detected_type = None
                 # Otherwise leave as None - user must choose
                 
                 # Get IPv4 address - handle multiple formats

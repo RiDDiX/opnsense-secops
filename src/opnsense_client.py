@@ -88,13 +88,42 @@ class OPNsenseClient:
         return nat_rules
 
     def get_interfaces(self) -> Dict:
-        """Get all network interfaces"""
+        """Get all network interfaces from multiple sources"""
+        interfaces = {}
+        
+        # Method 1: Try overview/export (newer API)
         try:
             result = self._make_request("GET", "/interfaces/overview/export")
-            return result
+            if result and isinstance(result, dict):
+                interfaces.update(result)
+                logger.debug(f"Got {len(result)} interfaces from overview/export")
         except Exception as e:
-            logger.error(f"Failed to get interfaces: {e}")
-            return {}
+            logger.debug(f"interfaces/overview/export failed: {e}")
+        
+        # Method 2: Try diagnostics/interface/getInterfaceConfig
+        try:
+            result = self._make_request("GET", "/diagnostics/interface/getInterfaceConfig")
+            if result and isinstance(result, dict):
+                for iface_name, iface_data in result.items():
+                    if iface_name not in interfaces:
+                        interfaces[iface_name] = iface_data
+                logger.debug(f"Got {len(result)} interfaces from getInterfaceConfig")
+        except Exception as e:
+            logger.debug(f"diagnostics/interface/getInterfaceConfig failed: {e}")
+        
+        # Method 3: Try legacy config endpoint
+        try:
+            result = self._make_request("GET", "/diagnostics/interface/getInterfaceNames")
+            if result and isinstance(result, dict):
+                for iface_key, iface_name in result.items():
+                    if iface_key not in interfaces:
+                        interfaces[iface_key] = {'descr': iface_name, 'if': iface_key}
+                logger.debug(f"Got {len(result)} interface names")
+        except Exception as e:
+            logger.debug(f"diagnostics/interface/getInterfaceNames failed: {e}")
+        
+        logger.info(f"Total interfaces found: {len(interfaces)} - {list(interfaces.keys())}")
+        return interfaces
 
     def get_vlans(self) -> List[Dict]:
         """Get VLAN configuration"""
