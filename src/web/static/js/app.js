@@ -10,6 +10,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loadConfig();
     loadReports();
     loadIgnoreList();
+    loadSecurityScore();
+    loadOptimalConfig();
 
     // Event listeners
     document.getElementById('start-scan-btn').addEventListener('click', startScan);
@@ -161,7 +163,8 @@ function displayFindings(report) {
         ...(report.port_findings || []),
         ...(report.dns_findings || []),
         ...(report.vlan_findings || []),
-        ...(report.vulnerability_findings || [])
+        ...(report.vulnerability_findings || []),
+        ...(report.system_findings || [])
     ];
 
     const bySeverity = {critical: [], high: [], medium: [], low: []};
@@ -295,4 +298,170 @@ function showToast(type, message) {
 
     document.getElementById('toast-container').appendChild(toast);
     setTimeout(() => toast.remove(), 3000);
+}
+
+// Security Score
+async function loadSecurityScore() {
+    try {
+        const response = await fetch('/api/security-score');
+        const data = await response.json();
+
+        if (data.success) {
+            displaySecurityScore(data);
+        }
+    } catch (e) {
+        console.error('Failed to load security score:', e);
+    }
+}
+
+function displaySecurityScore(data) {
+    const scoreEl = document.getElementById('security-score');
+    const gradeEl = document.getElementById('security-grade');
+    const circleEl = document.getElementById('score-circle');
+    const timestampEl = document.getElementById('score-timestamp');
+    const actionsList = document.getElementById('priority-actions-list');
+
+    if (data.score !== null) {
+        scoreEl.textContent = data.score;
+        gradeEl.textContent = `Grade: ${data.grade}`;
+        
+        // Apply grade class
+        const gradeClass = `grade-${data.grade.toLowerCase()}`;
+        circleEl.className = `score-circle ${gradeClass}`;
+        gradeEl.className = `grade ${gradeClass}`;
+
+        if (data.timestamp) {
+            timestampEl.textContent = `Last scan: ${data.timestamp}`;
+        }
+
+        // Display priority actions
+        if (data.priority_actions && data.priority_actions.length > 0) {
+            actionsList.innerHTML = data.priority_actions.map(action => `
+                <li class="${action.severity.toLowerCase()}">
+                    <span class="action-severity">${action.severity}</span>
+                    ${action.issue || action.action}
+                </li>
+            `).join('');
+        } else {
+            actionsList.innerHTML = '<li class="low">No critical actions required</li>';
+        }
+    } else {
+        scoreEl.textContent = '--';
+        gradeEl.textContent = 'N/A';
+        timestampEl.textContent = 'Run a scan to get your security score';
+        actionsList.innerHTML = '<li class="medium">Run a security scan to see priority actions</li>';
+    }
+}
+
+// Optimal Configuration
+async function loadOptimalConfig() {
+    try {
+        const response = await fetch('/api/optimal-config');
+        const data = await response.json();
+
+        if (data.success) {
+            displayOptimalConfig(data.recommendations);
+        }
+    } catch (e) {
+        console.error('Failed to load optimal config:', e);
+    }
+}
+
+function displayOptimalConfig(recommendations) {
+    // Display implementation guide
+    const phasesContainer = document.getElementById('implementation-phases');
+    if (recommendations.implementation_guide && phasesContainer) {
+        phasesContainer.innerHTML = recommendations.implementation_guide.map(phase => `
+            <div class="phase-card">
+                <div class="phase-header">
+                    <span class="phase-title">Phase ${phase.phase}: ${phase.title}</span>
+                    <span class="phase-duration">${phase.duration}</span>
+                </div>
+                <ul class="phase-steps">
+                    ${phase.steps.map(step => `<li>${step}</li>`).join('')}
+                </ul>
+            </div>
+        `).join('');
+    }
+
+    // Display category recommendations
+    if (recommendations.categories) {
+        displayCategoryRecommendations('firewall', recommendations.categories.firewall);
+        displayCategoryRecommendations('dns', recommendations.categories.dns);
+        displayCategoryRecommendations('network', recommendations.categories.network);
+        displayCategoryRecommendations('system', recommendations.categories.system);
+        displayCategoryRecommendations('monitoring', recommendations.categories.monitoring);
+    }
+
+    // Display optimal config summary
+    const configDetails = document.getElementById('optimal-config-details');
+    if (recommendations.optimal_config && configDetails) {
+        configDetails.innerHTML = Object.entries(recommendations.optimal_config).map(([category, settings]) => `
+            <div class="config-category-card">
+                <h5>${formatCategoryName(category)}</h5>
+                <ul>
+                    ${Object.entries(settings).map(([key, value]) => `
+                        <li>
+                            <span class="config-key">${formatSettingName(key)}</span>
+                            <span class="config-value">${value}</span>
+                        </li>
+                    `).join('')}
+                </ul>
+            </div>
+        `).join('');
+    }
+}
+
+function displayCategoryRecommendations(category, data) {
+    const container = document.getElementById(`${category}-recommendations`);
+    if (!container || !data) return;
+
+    let html = '';
+
+    if (data.recommendations) {
+        html = data.recommendations.map(rec => `
+            <div class="recommendation-item">
+                <h5>${rec.setting || rec.name}</h5>
+                ${rec.description ? `<p>${rec.description}</p>` : ''}
+                ${rec.steps ? `
+                    <ol class="recommendation-steps">
+                        ${rec.steps.map(step => `<li>${step}</li>`).join('')}
+                    </ol>
+                ` : ''}
+            </div>
+        `).join('');
+    }
+
+    // Add VLAN structure for network category
+    if (category === 'network' && data.recommended_vlan_structure) {
+        html += `
+            <div class="recommendation-item">
+                <h5>Recommended VLAN Structure</h5>
+                <table style="width:100%; border-collapse: collapse; margin-top: 0.5rem;">
+                    <tr style="background:#f8f9fa;">
+                        <th style="padding:0.5rem; text-align:left; border:1px solid #ecf0f1;">VLAN ID</th>
+                        <th style="padding:0.5rem; text-align:left; border:1px solid #ecf0f1;">Name</th>
+                        <th style="padding:0.5rem; text-align:left; border:1px solid #ecf0f1;">Purpose</th>
+                    </tr>
+                    ${data.recommended_vlan_structure.map(vlan => `
+                        <tr>
+                            <td style="padding:0.5rem; border:1px solid #ecf0f1;">${vlan.vlan_id}</td>
+                            <td style="padding:0.5rem; border:1px solid #ecf0f1;">${vlan.name}</td>
+                            <td style="padding:0.5rem; border:1px solid #ecf0f1;">${vlan.purpose}</td>
+                        </tr>
+                    `).join('')}
+                </table>
+            </div>
+        `;
+    }
+
+    container.innerHTML = html || '<p style="padding:1rem; color:#7f8c8d;">No specific recommendations</p>';
+}
+
+function formatCategoryName(name) {
+    return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function formatSettingName(name) {
+    return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }

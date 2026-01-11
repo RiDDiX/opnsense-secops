@@ -337,6 +337,84 @@ def get_translations(lang):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/optimal-config', methods=['GET'])
+def get_optimal_config():
+    """Get optimal security configuration recommendations"""
+    try:
+        from analyzers.optimal_config_generator import OptimalConfigGenerator
+        generator = OptimalConfigGenerator()
+        
+        # Get latest report if available
+        latest_report = None
+        reports_list = []
+        for filename in os.listdir(REPORTS_DIR):
+            if filename.startswith('security_audit_') and filename.endswith('.json'):
+                reports_list.append(filename)
+        
+        if reports_list:
+            reports_list.sort(reverse=True)
+            filepath = os.path.join(REPORTS_DIR, reports_list[0])
+            with open(filepath, 'r') as f:
+                latest_report = json.load(f)
+        
+        if latest_report:
+            recommendations = generator.generate_recommendations(latest_report)
+        else:
+            # Return default optimal config without score
+            recommendations = {
+                "security_score": None,
+                "grade": "N/A",
+                "optimal_config": generator._get_optimal_config(),
+                "implementation_guide": generator._get_implementation_guide(),
+                "message": "Run a scan to get personalized recommendations"
+            }
+        
+        return jsonify({
+            'success': True,
+            'recommendations': recommendations
+        })
+    except Exception as e:
+        logger.error(f"Failed to get optimal config: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/security-score', methods=['GET'])
+def get_security_score():
+    """Get current security score from latest report"""
+    try:
+        # Find latest report
+        reports_list = []
+        for filename in os.listdir(REPORTS_DIR):
+            if filename.startswith('security_audit_') and filename.endswith('.json'):
+                reports_list.append(filename)
+        
+        if not reports_list:
+            return jsonify({
+                'success': True,
+                'score': None,
+                'grade': 'N/A',
+                'message': 'No scans completed yet'
+            })
+        
+        reports_list.sort(reverse=True)
+        filepath = os.path.join(REPORTS_DIR, reports_list[0])
+        
+        with open(filepath, 'r') as f:
+            report = json.load(f)
+        
+        return jsonify({
+            'success': True,
+            'score': report.get('security_score', 0),
+            'grade': report.get('security_grade', 'F'),
+            'summary': report.get('summary', {}),
+            'priority_actions': report.get('priority_actions', [])[:5],
+            'timestamp': report.get('scan_timestamp', '')
+        })
+    except Exception as e:
+        logger.error(f"Failed to get security score: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     # Create necessary directories
     os.makedirs(REPORTS_DIR, exist_ok=True)

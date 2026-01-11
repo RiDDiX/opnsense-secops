@@ -197,3 +197,110 @@ network_segmentation:
     - name: "DMZ"
       id: 99
       purpose: "Public facing services"
+
+# System Security Checks
+system_security:
+  ssh_settings:
+    - name: "Root Login"
+      check: "ssh_root_login"
+      severity: "HIGH"
+      reason: "Direct root login via SSH is a security risk"
+      solution: "Disable root login in System > Settings > Administration"
+    - name: "Password Authentication"
+      check: "ssh_password_auth"
+      severity: "MEDIUM"
+      reason: "Key-based authentication is more secure"
+      solution: "Use SSH keys and disable password authentication"
+    - name: "SSH WAN Access"
+      check: "ssh_wan_access"
+      severity: "CRITICAL"
+      reason: "SSH should never be directly accessible from the internet"
+      solution: "Restrict SSH to LAN/Management interfaces only"
+
+  admin_interface:
+    - name: "HTTPS Only"
+      check: "webgui_https"
+      severity: "CRITICAL"
+      reason: "Admin credentials can be intercepted without encryption"
+      solution: "Enable HTTPS in System > Settings > Administration"
+    - name: "WAN Access"
+      check: "webgui_wan_access"
+      severity: "CRITICAL"
+      reason: "Admin interface should never be exposed to internet"
+      solution: "Remove WAN from allowed interfaces, use VPN for remote access"
+    - name: "HSTS"
+      check: "webgui_hsts"
+      severity: "MEDIUM"
+      reason: "HSTS prevents protocol downgrade attacks"
+      solution: "Enable HSTS in System > Settings > Administration"
+
+  ids_ips:
+    - name: "IDS Enabled"
+      check: "ids_enabled"
+      severity: "MEDIUM"
+      reason: "IDS provides additional layer of security"
+      solution: "Enable Suricata IDS in Services > Intrusion Detection"
+    - name: "Rule Updates"
+      check: "ids_rule_updates"
+      severity: "MEDIUM"
+      reason: "Outdated rules may miss new threats"
+      solution: "Enable automatic rule updates in IDS settings"
+
+  authentication:
+    - name: "Two-Factor Authentication"
+      check: "auth_2fa"
+      severity: "MEDIUM"
+      reason: "2FA provides additional protection for admin access"
+      solution: "Enable TOTP in System > Access > Users"
+    - name: "Account Lockout"
+      check: "auth_lockout"
+      severity: "MEDIUM"
+      reason: "Lockout prevents brute force attacks"
+      solution: "Configure account lockout after 3-5 failed attempts"
+
+# Additional Port Security
+additional_critical_ports:
+  - port: 5900
+    name: "VNC"
+    severity: "HIGH"
+    reason: "VNC should not be publicly accessible"
+  - port: 5901
+    name: "VNC Alt"
+    severity: "HIGH"
+    reason: "VNC should not be publicly accessible"
+  - port: 1521
+    name: "Oracle DB"
+    severity: "CRITICAL"
+    reason: "Database should not be publicly accessible"
+  - port: 11211
+    name: "Memcached"
+    severity: "CRITICAL"
+    reason: "Memcached should not be publicly accessible"
+  - port: 5672
+    name: "RabbitMQ"
+    severity: "HIGH"
+    reason: "Message queue should not be publicly accessible"
+  - port: 15672
+    name: "RabbitMQ Management"
+    severity: "HIGH"
+    reason: "Management interface should not be publicly accessible"
+  - port: 8086
+    name: "InfluxDB"
+    severity: "HIGH"
+    reason: "Time series database should not be publicly accessible"
+  - port: 9090
+    name: "Prometheus"
+    severity: "MEDIUM"
+    reason: "Monitoring interface should be protected"
+  - port: 9100
+    name: "Node Exporter"
+    severity: "LOW"
+    reason: "Exposes system metrics"
+  - port: 2379
+    name: "etcd"
+    severity: "CRITICAL"
+    reason: "etcd should never be publicly accessible"
+  - port: 6443
+    name: "Kubernetes API"
+    severity: "CRITICAL"
+    reason: "K8s API should be protected"

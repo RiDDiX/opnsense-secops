@@ -32,6 +32,10 @@
                 <i class="fas fa-list"></i>
                 <span data-i18n="ignore_list">Ignore List</span>
             </a>
+            <a href="#optimal-config" class="nav-item" data-page="optimal-config">
+                <i class="fas fa-shield-alt"></i>
+                <span data-i18n="optimal_config">Optimal Config</span>
+            </a>
         </nav>
 
         <div class="sidebar-footer">
@@ -69,6 +73,25 @@
         <!-- Dashboard Page -->
         <div id="page-dashboard" class="page active">
             <h2 data-i18n="dashboard">Dashboard</h2>
+
+            <!-- Security Score -->
+            <div class="security-score-container">
+                <div class="security-score-card">
+                    <div class="score-circle" id="score-circle">
+                        <span class="score-value" id="security-score">--</span>
+                        <span class="score-label">/ 100</span>
+                    </div>
+                    <div class="score-details">
+                        <h3>Security Score</h3>
+                        <span class="grade" id="security-grade">--</span>
+                        <p class="score-timestamp" id="score-timestamp"></p>
+                    </div>
+                </div>
+                <div class="priority-actions-card">
+                    <h3><i class="fas fa-exclamation-triangle"></i> Priority Actions</h3>
+                    <ul id="priority-actions-list"></ul>
+                </div>
+            </div>
 
             <!-- Summary Cards -->
             <div class="summary-cards">
@@ -236,6 +259,53 @@
                     <h3>Hosts</h3>
                     <div id="ignore-hosts-list"></div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Optimal Configuration Page -->
+        <div id="page-optimal-config" class="page">
+            <h2 data-i18n="optimal_config">Optimal Security Configuration</h2>
+            
+            <!-- Implementation Guide -->
+            <div class="implementation-guide">
+                <h3><i class="fas fa-clipboard-list"></i> Implementation Guide</h3>
+                <div id="implementation-phases"></div>
+            </div>
+
+            <!-- Category Recommendations -->
+            <div class="config-recommendations">
+                <h3><i class="fas fa-cogs"></i> Configuration Recommendations</h3>
+                
+                <div class="recommendation-category">
+                    <h4><i class="fas fa-fire"></i> Firewall</h4>
+                    <div id="firewall-recommendations"></div>
+                </div>
+
+                <div class="recommendation-category">
+                    <h4><i class="fas fa-globe"></i> DNS Security</h4>
+                    <div id="dns-recommendations"></div>
+                </div>
+
+                <div class="recommendation-category">
+                    <h4><i class="fas fa-network-wired"></i> Network Segmentation</h4>
+                    <div id="network-recommendations"></div>
+                </div>
+
+                <div class="recommendation-category">
+                    <h4><i class="fas fa-server"></i> System Security</h4>
+                    <div id="system-recommendations"></div>
+                </div>
+
+                <div class="recommendation-category">
+                    <h4><i class="fas fa-chart-line"></i> Monitoring</h4>
+                    <div id="monitoring-recommendations"></div>
+                </div>
+            </div>
+
+            <!-- Optimal Config Summary -->
+            <div class="optimal-config-summary">
+                <h3><i class="fas fa-check-circle"></i> Target Configuration</h3>
+                <div id="optimal-config-details"></div>
             </div>
         </div>
     </main>

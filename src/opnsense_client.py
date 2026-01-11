@@ -143,3 +143,93 @@ class OPNsenseClient:
         except Exception as e:
             logger.error(f"Failed to connect to OPNsense: {e}")
             return False
+
+    def get_system_config(self) -> Dict:
+        """Get comprehensive system security configuration"""
+        config = {
+            "ssh": {},
+            "webgui": {},
+            "ids": {},
+            "firmware": {},
+            "general": {},
+            "auth": {}
+        }
+
+        # Get SSH configuration
+        try:
+            result = self._make_request("GET", "/core/system/sshSettings/get")
+            config["ssh"] = result.get("settings", {})
+        except Exception as e:
+            logger.debug(f"Failed to get SSH config: {e}")
+
+        # Get Web GUI settings
+        try:
+            result = self._make_request("GET", "/core/system/webguiSettings/get")
+            config["webgui"] = result.get("webgui", {})
+        except Exception as e:
+            logger.debug(f"Failed to get WebGUI config: {e}")
+
+        # Get IDS/IPS configuration
+        try:
+            result = self._make_request("GET", "/ids/settings/get")
+            config["ids"] = result.get("ids", {})
+        except Exception as e:
+            logger.debug(f"Failed to get IDS config: {e}")
+
+        # Get firmware status
+        try:
+            result = self._make_request("GET", "/core/firmware/status")
+            config["firmware"] = result
+        except Exception as e:
+            logger.debug(f"Failed to get firmware status: {e}")
+
+        # Get general settings
+        try:
+            result = self._make_request("GET", "/core/system/generalSettings/get")
+            config["general"] = result.get("general", {})
+        except Exception as e:
+            logger.debug(f"Failed to get general settings: {e}")
+
+        return config
+
+    def get_certificates(self) -> List[Dict]:
+        """Get SSL/TLS certificates"""
+        try:
+            result = self._make_request("GET", "/trust/cert/search")
+            return result.get("rows", [])
+        except Exception as e:
+            logger.error(f"Failed to get certificates: {e}")
+            return []
+
+    def get_vpn_config(self) -> Dict:
+        """Get VPN configurations"""
+        vpn_config = {"openvpn": [], "wireguard": [], "ipsec": {}}
+
+        try:
+            result = self._make_request("GET", "/openvpn/instances/search")
+            vpn_config["openvpn"] = result.get("rows", [])
+        except Exception as e:
+            logger.debug(f"Failed to get OpenVPN config: {e}")
+
+        try:
+            result = self._make_request("GET", "/wireguard/server/search")
+            vpn_config["wireguard"] = result.get("rows", [])
+        except Exception as e:
+            logger.debug(f"Failed to get WireGuard config: {e}")
+
+        try:
+            result = self._make_request("GET", "/ipsec/tunnel/search")
+            vpn_config["ipsec"] = result.get("rows", [])
+        except Exception as e:
+            logger.debug(f"Failed to get IPsec config: {e}")
+
+        return vpn_config
+
+    def get_firewall_settings(self) -> Dict:
+        """Get firewall advanced settings"""
+        try:
+            result = self._make_request("GET", "/firewall/settings/get")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get firewall settings: {e}")
+            return {}

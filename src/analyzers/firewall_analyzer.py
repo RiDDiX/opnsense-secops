@@ -34,6 +34,9 @@ class FirewallAnalyzer:
 
         findings.extend(self._analyze_firewall_rules(firewall_rules))
         findings.extend(self._analyze_nat_rules(nat_rules))
+        findings.extend(self._analyze_security_policies(firewall_rules))
+        findings.extend(self._analyze_ipv6_rules(firewall_rules))
+        findings.extend(self._analyze_rule_ordering(firewall_rules))
 
         return findings
 
@@ -191,3 +194,215 @@ class FirewallAnalyzer:
         """Check if NAT rule has unrestricted source"""
         src = rule.get("source_net", "").lower()
         return src in ["any", "", "0.0.0.0/0", "::/0"]
+
+    def _analyze_security_policies(self, rules: List[Dict]) -> List[FirewallFinding]:
+        """Analyze overall security policies"""
+        findings = []
+
+        # Check for default deny policy
+        has_default_deny = False
+        has_bogon_block = False
+        has_rfc1918_block_wan = False
+        has_anti_spoofing = False
+
+        for rule in rules:
+            if not rule.get("enabled", "0") == "1":
+                continue
+
+            interface = rule.get("interface", "").lower()
+            action = rule.get("action", "").lower()
+            src = rule.get("source_net", "").lower()
+            dst = rule.get("destination_net", "").lower()
+            description = rule.get("description", "").lower()
+
+            # Check for default deny (last rule blocking all)
+            if action == "block" and src in ["any", ""] and dst in ["any", ""]:
+                has_default_deny = True
+
+            # Check for bogon blocking on WAN
+            if "wan" in interface and action == "block":
+                if "bogon" in description or "bogon" in src:
+                    has_bogon_block = True
+
+            # Check for RFC1918 blocking on WAN incoming
+            if "wan" in interface and action == "block":
+                if any(net in src for net in ["10.0.0.0", "172.16.0.0", "192.168.0.0", "rfc1918", "private"]):
+                    has_rfc1918_block_wan = True
+
+            # Check for anti-spoofing rules
+            if "spoof" in description or "anti-spoof" in description:
+                has_anti_spoofing = True
+
+        if not has_default_deny:
+            findings.append(FirewallFinding(
+                severity="HIGH",
+                rule_id="policy_default_deny",
+                rule_description="Default Deny Policy",
+                issue="No default deny policy detected",
+                reason="Without a default deny policy, unmatched traffic may be allowed",
+                solution="Add a final rule on each interface that blocks all unmatched traffic",
+                rule_details={"recommendation": "Block any to any as last rule"}
+            ))
+
+        if not has_bogon_block:
+            findings.append(FirewallFinding(
+                severity="MEDIUM",
+                rule_id="policy_bogon_block",
+                rule_description="Bogon Blocking",
+                issue="No bogon blocking on WAN interface",
+                reason="Bogon addresses (unallocated IP ranges) should be blocked on WAN",
+                solution="Enable bogon blocking in Firewall > Settings or add explicit bogon block rules",
+                rule_details={"recommendation": "Block bogon networks on WAN"}
+            ))
+
+        if not has_rfc1918_block_wan:
+            findings.append(FirewallFinding(
+                severity="HIGH",
+                rule_id="policy_rfc1918_wan",
+                rule_description="RFC1918 on WAN",
+                issue="No RFC1918 (private) address blocking on WAN incoming",
+                reason="Private IP addresses should never arrive from WAN - indicates spoofing",
+                solution="Block incoming traffic from 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 on WAN",
+                rule_details={"recommendation": "Block private networks on WAN inbound"}
+            ))
+
+        if not has_anti_spoofing:
+            findings.append(FirewallFinding(
+                severity="MEDIUM",
+                rule_id="policy_anti_spoofing",
+                rule_description="Anti-Spoofing",
+                issue="No explicit anti-spoofing rules detected",
+                reason="Anti-spoofing prevents attackers from forging source IP addresses",
+                solution="Enable anti-spoofing in Firewall > Settings > Advanced or use pf anti-spoof",
+                rule_details={"recommendation": "Enable anti-spoofing protection"}
+            ))
+
+        return findings
+
+    def _analyze_ipv6_rules(self, rules: List[Dict]) -> List[FirewallFinding]:
+        """Analyze IPv6 specific rules"""
+        findings = []
+
+        has_ipv6_rules = False
+        ipv6_any_allow = False
+
+        for rule in rules:
+            if not rule.get("enabled", "0") == "1":
+                continue
+
+            # Check if rule applies to IPv6
+            ipprotocol = rule.get("ipprotocol", "").lower()
+            src = rule.get("source_net", "")
+            dst = rule.get("destination_net", "")
+
+            if ipprotocol == "inet6" or "::" in src or "::" in dst:
+                has_ipv6_rules = True
+
+                # Check for overly permissive IPv6 rules
+                action = rule.get("action", "").lower()
+                if action == "pass":
+                    if src in ["any", "::/0", ""] and dst in ["any", "::/0", ""]:
+                        ipv6_any_allow = True
+
+        # If IPv6 is enabled but no specific rules, warn
+        if has_ipv6_rules and ipv6_any_allow:
+            findings.append(FirewallFinding(
+                severity="HIGH",
+                rule_id="ipv6_any_allow",
+                rule_description="IPv6 Any-to-Any",
+                issue="IPv6 any-to-any rule detected",
+                reason="IPv6 should have the same restrictions as IPv4",
+                solution="Apply the same firewall policies to IPv6 as IPv4",
+                rule_details={"recommendation": "Review and restrict IPv6 rules"}
+            ))
+
+        return findings
+
+    def _analyze_rule_ordering(self, rules: List[Dict]) -> List[FirewallFinding]:
+        """Analyze rule ordering for potential issues"""
+        findings = []
+
+        # Group rules by interface
+        interface_rules = {}
+        for rule in rules:
+            if not rule.get("enabled", "0") == "1":
+                continue
+            interface = rule.get("interface", "unknown")
+            if interface not in interface_rules:
+                interface_rules[interface] = []
+            interface_rules[interface].append(rule)
+
+        for interface, iface_rules in interface_rules.items():
+            # Check if allow-all appears before more specific rules
+            allow_all_index = -1
+            specific_rule_after = False
+
+            for idx, rule in enumerate(iface_rules):
+                action = rule.get("action", "").lower()
+                src = rule.get("source_net", "").lower()
+                dst = rule.get("destination_net", "").lower()
+
+                if action == "pass" and src in ["any", ""] and dst in ["any", ""]:
+                    allow_all_index = idx
+                elif allow_all_index >= 0 and action in ["pass", "block"]:
+                    # There's a specific rule after an allow-all
+                    specific_rule_after = True
+                    break
+
+            if allow_all_index >= 0 and specific_rule_after:
+                findings.append(FirewallFinding(
+                    severity="MEDIUM",
+                    rule_id=f"rule_order_{interface}",
+                    rule_description=f"Rule ordering on {interface}",
+                    issue=f"Specific rules appear after allow-all on {interface}",
+                    reason="Rules after an allow-all will never be evaluated",
+                    solution=f"Reorder rules on {interface} - specific rules should come before general rules",
+                    rule_details={"interface": interface, "allow_all_position": allow_all_index}
+                ))
+
+        return findings
+
+    def get_optimal_firewall_config(self) -> Dict:
+        """Return optimal firewall configuration recommendations"""
+        return {
+            "recommended_policies": [
+                {
+                    "name": "Default Deny",
+                    "description": "Block all traffic not explicitly allowed",
+                    "implementation": "Add 'Block any to any' as last rule on each interface"
+                },
+                {
+                    "name": "Bogon Blocking",
+                    "description": "Block unallocated IP address ranges",
+                    "implementation": "Enable in Firewall > Settings > Advanced > Block bogon networks"
+                },
+                {
+                    "name": "RFC1918 Blocking on WAN",
+                    "description": "Block private addresses from WAN",
+                    "implementation": "Enable in Firewall > Settings > Advanced > Block private networks"
+                },
+                {
+                    "name": "Anti-Spoofing",
+                    "description": "Prevent IP address spoofing",
+                    "implementation": "Enable antispoof for each interface in Firewall > Settings"
+                },
+                {
+                    "name": "Stateful Filtering",
+                    "description": "Track connection states",
+                    "implementation": "Enabled by default - ensure 'State Type' is set appropriately"
+                },
+                {
+                    "name": "Logging",
+                    "description": "Log blocked traffic for analysis",
+                    "implementation": "Enable logging on block rules, especially WAN"
+                }
+            ],
+            "recommended_rule_order": [
+                "1. Anti-lockout rule (if needed)",
+                "2. Block bogon/RFC1918 on WAN",
+                "3. Allow established/related connections",
+                "4. Specific allow rules (most specific first)",
+                "5. Specific block rules",
+                "6. Default deny (block all)"
+            ]
+        }

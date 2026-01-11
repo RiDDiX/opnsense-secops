@@ -118,6 +118,10 @@ class ConfigLoader:
         exceptions = self.exceptions.get("host_exceptions", [])
         return [exc.get("ip") for exc in exceptions if exc.get("ip")]
 
+    def get_system_exceptions(self) -> List[Dict]:
+        """Get system security exceptions"""
+        return self.exceptions.get("system_exceptions", [])
+
     def validate_config(self) -> List[str]:
         """Validate configuration and return list of warnings"""
         warnings = []

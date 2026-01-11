@@ -17,6 +17,8 @@ from analyzers.dns_analyzer import DNSAnalyzer
 from analyzers.vlan_analyzer import VLANAnalyzer
 from analyzers.network_discovery import NetworkDiscovery
 from analyzers.vulnerability_scanner import VulnerabilityScanner
+from analyzers.system_security_analyzer import SystemSecurityAnalyzer
+from analyzers.optimal_config_generator import OptimalConfigGenerator
 
 # Configure logging
 logging.basicConfig(
@@ -53,6 +55,8 @@ class SecurityAuditor:
         self.vlan_analyzer = None
         self.network_discovery = None
         self.vulnerability_scanner = None
+        self.system_security_analyzer = None
+        self.optimal_config_generator = None
 
         # Report generator
         self.report_generator = ReportGenerator(self.config_loader.get_report_options())
@@ -124,6 +128,13 @@ class SecurityAuditor:
 
         self.vulnerability_scanner = VulnerabilityScanner(scan_options)
 
+        self.system_security_analyzer = SystemSecurityAnalyzer(
+            self.rules,
+            self.config_loader.get_system_exceptions()
+        )
+
+        self.optimal_config_generator = OptimalConfigGenerator()
+
         logger.info("All analyzers initialized")
 
     def run_audit(self) -> Dict:
@@ -138,11 +149,15 @@ class SecurityAuditor:
             "dns_findings": [],
             "vlan_findings": [],
             "vulnerability_findings": [],
+            "system_findings": [],
             "devices": [],
             "network_map": {},
             "statistics": {},
             "vulnerability_summary": {},
-            "summary": {}
+            "summary": {},
+            "optimal_config": {},
+            "security_score": 0,
+            "security_grade": "F"
         }
 
         # Collect data from OPNsense
@@ -204,6 +219,13 @@ class SecurityAuditor:
         results["port_findings"] = [asdict(f) for f in port_findings]
         logger.info(f"Found {len(port_findings)} port security issues")
 
+        # System Security Analysis
+        logger.info("Analyzing system security configuration...")
+        system_config = self.client.get_system_config()
+        system_findings = self.system_security_analyzer.analyze(system_config)
+        results["system_findings"] = [asdict(f) for f in system_findings]
+        logger.info(f"Found {len(system_findings)} system security issues")
+
         # Vulnerability Scanning
         logger.info("Scanning for known vulnerabilities...")
 
@@ -237,9 +259,20 @@ class SecurityAuditor:
         logger.info(f"Found {len(vuln_findings)} known vulnerabilities")
 
         # Generate Summary
-        all_findings = firewall_findings + port_findings + dns_findings + vlan_findings + vuln_findings
+        all_findings = firewall_findings + port_findings + dns_findings + vlan_findings + vuln_findings + system_findings
         results["summary"] = self._generate_summary(all_findings)
 
+        # Generate Optimal Configuration Recommendations
+        logger.info("Generating optimal configuration recommendations...")
+        config_recommendations = self.optimal_config_generator.generate_recommendations(results)
+        results["optimal_config"] = config_recommendations.get("optimal_config", {})
+        results["security_score"] = config_recommendations.get("security_score", 0)
+        results["security_grade"] = config_recommendations.get("grade", "F")
+        results["priority_actions"] = config_recommendations.get("priority_actions", [])
+        results["implementation_guide"] = config_recommendations.get("implementation_guide", [])
+        results["category_recommendations"] = config_recommendations.get("categories", {})
+
+        logger.info(f"Security Score: {results['security_score']}/100 (Grade: {results['security_grade']})")
         logger.info("Security audit completed")
         return results
 
