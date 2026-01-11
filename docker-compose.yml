@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  opnsense-auditor:
+    build: .
+    container_name: opnsense-security-auditor
+    network_mode: host
+    volumes:
+      - ./config:/app/config
+      - ./reports:/app/reports
+    environment:
+      - OPNSENSE_HOST=${OPNSENSE_HOST:-192.168.1.1}
+      - OPNSENSE_API_KEY=${OPNSENSE_API_KEY}
+      - OPNSENSE_API_SECRET=${OPNSENSE_API_SECRET}
+      - SCAN_NETWORK=${SCAN_NETWORK:-192.168.1.0/24}
+    restart: "no"

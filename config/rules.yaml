@@ -1,0 +1,199 @@
+# Security Audit Rules Configuration
+
+# Critical Ports - Diese Ports sollten NICHT öffentlich erreichbar sein
+critical_ports:
+  # Remote Administration
+  - port: 22
+    name: "SSH"
+    severity: "HIGH"
+    reason: "SSH sollte nicht öffentlich erreichbar sein"
+  - port: 23
+    name: "Telnet"
+    severity: "CRITICAL"
+    reason: "Telnet ist unverschlüsselt und unsicher"
+  - port: 3389
+    name: "RDP"
+    severity: "HIGH"
+    reason: "RDP sollte nicht öffentlich erreichbar sein"
+
+  # Databases
+  - port: 3306
+    name: "MySQL"
+    severity: "CRITICAL"
+    reason: "Datenbank sollte nicht öffentlich erreichbar sein"
+  - port: 5432
+    name: "PostgreSQL"
+    severity: "CRITICAL"
+    reason: "Datenbank sollte nicht öffentlich erreichbar sein"
+  - port: 1433
+    name: "MSSQL"
+    severity: "CRITICAL"
+    reason: "Datenbank sollte nicht öffentlich erreichbar sein"
+  - port: 27017
+    name: "MongoDB"
+    severity: "CRITICAL"
+    reason: "Datenbank sollte nicht öffentlich erreichbar sein"
+  - port: 6379
+    name: "Redis"
+    severity: "HIGH"
+    reason: "Redis sollte nicht öffentlich erreichbar sein"
+
+  # Admin Interfaces
+  - port: 8080
+    name: "HTTP Alt"
+    severity: "MEDIUM"
+    reason: "Alternative HTTP Ports können Admin-Interfaces sein"
+  - port: 8443
+    name: "HTTPS Alt"
+    severity: "MEDIUM"
+    reason: "Alternative HTTPS Ports können Admin-Interfaces sein"
+  - port: 10000
+    name: "Webmin"
+    severity: "HIGH"
+    reason: "Webmin sollte nicht öffentlich erreichbar sein"
+
+  # Network Services
+  - port: 445
+    name: "SMB"
+    severity: "CRITICAL"
+    reason: "SMB sollte niemals öffentlich erreichbar sein"
+  - port: 139
+    name: "NetBIOS"
+    severity: "CRITICAL"
+    reason: "NetBIOS sollte nicht öffentlich erreichbar sein"
+  - port: 111
+    name: "NFS"
+    severity: "CRITICAL"
+    reason: "NFS sollte nicht öffentlich erreichbar sein"
+
+  # Docker & Container
+  - port: 2375
+    name: "Docker"
+    severity: "CRITICAL"
+    reason: "Unverschlüsselter Docker API Port"
+  - port: 2376
+    name: "Docker TLS"
+    severity: "HIGH"
+    reason: "Docker API sollte nicht öffentlich erreichbar sein"
+
+  # Elasticsearch & Kibana
+  - port: 9200
+    name: "Elasticsearch"
+    severity: "CRITICAL"
+    reason: "Elasticsearch sollte nicht öffentlich erreichbar sein"
+  - port: 5601
+    name: "Kibana"
+    severity: "HIGH"
+    reason: "Kibana sollte nicht öffentlich erreichbar sein"
+
+# Ausnahmen - Diese Ports sind für bestimmte Zwecke erlaubt
+allowed_ports:
+  - port: 80
+    name: "HTTP"
+    reason: "Webserver für öffentliche Dienste"
+  - port: 443
+    name: "HTTPS"
+    reason: "Verschlüsselter Webserver für öffentliche Dienste"
+  - port: 25
+    name: "SMTP"
+    reason: "Mail-Server"
+  - port: 587
+    name: "SMTP Submission"
+    reason: "Mail-Submission"
+  - port: 993
+    name: "IMAPS"
+    reason: "Verschlüsselter Mail-Zugriff"
+  - port: 465
+    name: "SMTPS"
+    reason: "Verschlüsselter Mail-Versand"
+
+# DNS Security Checks
+dns_security:
+  required_features:
+    - name: "DNSSEC"
+      check: "dnssec_enabled"
+      severity: "HIGH"
+      reason: "DNSSEC schützt vor DNS-Spoofing"
+      solution: "Aktiviere DNSSEC in Services > Unbound DNS > DNSSEC"
+
+    - name: "DNS Rebinding Protection"
+      check: "rebinding_protection"
+      severity: "CRITICAL"
+      reason: "Schützt vor DNS Rebinding Attacken"
+      solution: "Aktiviere 'Private Address' Filter in Unbound"
+
+    - name: "DNS over TLS"
+      check: "dot_enabled"
+      severity: "MEDIUM"
+      reason: "Verschlüsselt DNS-Anfragen"
+      solution: "Konfiguriere DNS over TLS Forwarding"
+
+  dangerous_settings:
+    - name: "Open DNS Resolver"
+      check: "open_resolver"
+      severity: "CRITICAL"
+      reason: "Offener DNS Resolver kann für DDoS missbraucht werden"
+      solution: "Beschränke DNS auf lokale Netzwerke"
+
+# Firewall Rule Security Checks
+firewall_rules:
+  dangerous_patterns:
+    - pattern: "any_to_any"
+      severity: "CRITICAL"
+      description: "Regel erlaubt Traffic von überall nach überall"
+      solution: "Definiere spezifische Source/Destination Regeln"
+
+    - pattern: "wan_to_any"
+      severity: "HIGH"
+      description: "Regel erlaubt eingehenden WAN Traffic ohne Einschränkung"
+      solution: "Beschränke eingehenden WAN Traffic auf notwendige Ports"
+
+    - pattern: "no_logging"
+      severity: "MEDIUM"
+      description: "Wichtige Regeln ohne Logging"
+      solution: "Aktiviere Logging für Sicherheits-relevante Regeln"
+
+    - pattern: "default_allow"
+      severity: "HIGH"
+      description: "Default Allow Policy ist unsicher"
+      solution: "Verwende Default Deny und erlaube nur notwendigen Traffic"
+
+# VLAN Security
+vlan_security:
+  checks:
+    - name: "VLAN Isolation"
+      description: "VLANs sollten isoliert sein"
+      severity: "HIGH"
+      solution: "Blockiere Inter-VLAN Routing außer wo nötig"
+
+    - name: "Management VLAN"
+      description: "Management sollte in separatem VLAN sein"
+      severity: "CRITICAL"
+      solution: "Erstelle dediziertes Management VLAN"
+
+    - name: "Guest Network Isolation"
+      description: "Guest Netzwerk sollte vom internen Netzwerk getrennt sein"
+      severity: "HIGH"
+      solution: "Isoliere Guest VLAN komplett vom internen Netzwerk"
+
+# Network Segmentation
+network_segmentation:
+  recommended_vlans:
+    - name: "Management"
+      id: 10
+      purpose: "OPNsense & Infrastructure Management"
+    - name: "Servers"
+      id: 20
+      purpose: "Server & Services"
+    - name: "Workstations"
+      id: 30
+      purpose: "User Workstations"
+    - name: "IoT"
+      id: 40
+      purpose: "IoT Devices (isolated)"
+    - name: "Guest"
+      id: 50
+      purpose: "Guest Network (isolated)"
+    - name: "DMZ"
+      id: 99
+      purpose: "Public facing services"

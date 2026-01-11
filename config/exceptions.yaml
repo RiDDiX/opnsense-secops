@@ -1,0 +1,66 @@
+# Exceptions Configuration
+# Hier können spezifische Ausnahmen für dein Netzwerk definiert werden
+
+# Port Exceptions - Diese Ports werden nicht als kritisch gemeldet
+port_exceptions:
+  # Beispiel: Homelab Services
+  # - port: 8080
+  #   host: "192.168.1.100"
+  #   reason: "Home Assistant"
+  # - port: 8123
+  #   host: "192.168.1.101"
+  #   reason: "Portainer"
+  # - port: 32400
+  #   host: "192.168.1.105"
+  #   reason: "Plex Media Server"
+
+# Firewall Rule Exceptions - Diese Regeln werden nicht als problematisch gemeldet
+firewall_exceptions:
+  # - rule_id: "some-rule-uuid"
+  #   reason: "Benötigt für spezifischen Service"
+
+# DNS Exceptions
+dns_exceptions:
+  # - check: "dnssec_enabled"
+  #   reason: "ISP unterstützt kein DNSSEC"
+
+# VLAN Exceptions
+vlan_exceptions:
+  # - check: "vlan_isolation"
+  #   vlans: [10, 20]
+  #   reason: "Management und Server müssen kommunizieren"
+
+# Host Exceptions - Hosts die nicht gescannt werden sollen
+host_exceptions:
+  # - ip: "192.168.1.1"
+  #   reason: "OPNsense selbst"
+  # - ip: "192.168.1.254"
+  #   reason: "Backup Router"
+
+# Globale Scan-Optionen
+scan_options:
+  # Aggressive Scanning (kann false Positives reduzieren, dauert aber länger)
+  aggressive_scan: false
+
+  # Port-Scan Timeout in Sekunden
+  port_scan_timeout: 300
+
+  # Maximale Anzahl gleichzeitiger Scans
+  max_parallel_scans: 10
+
+  # Skip Ping-Check (nützlich wenn Hosts nicht auf Ping antworten)
+  skip_ping: false
+
+# Report Options
+report_options:
+  # Format: json, html, text, all
+  output_format: "all"
+
+  # Detailgrad: minimal, normal, verbose
+  detail_level: "normal"
+
+  # Nur kritische Findings anzeigen
+  critical_only: false
+
+  # Include remediation suggestions
+  include_solutions: true
