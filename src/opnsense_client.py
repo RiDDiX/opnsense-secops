@@ -26,8 +26,15 @@ class OPNsenseClient:
         self.session.auth = (api_key, api_secret)
         self.session.verify = verify_ssl
 
-    def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None) -> Dict:
-        """Make HTTP request to OPNsense API"""
+    def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, silent: bool = False) -> Dict:
+        """Make HTTP request to OPNsense API
+        
+        Args:
+            method: HTTP method (GET/POST)
+            endpoint: API endpoint
+            data: Optional JSON data for POST requests
+            silent: If True, don't log errors (for expected fallbacks)
+        """
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
 
         try:
@@ -41,7 +48,8 @@ class OPNsenseClient:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed: {e}")
+            if not silent:
+                logger.error(f"API request failed: {e}")
             raise
 
     def get_firewall_rules(self) -> List[Dict]:
@@ -93,34 +101,34 @@ class OPNsenseClient:
         
         # Method 1: Try overview/export (newer API)
         try:
-            result = self._make_request("GET", "/interfaces/overview/export")
+            result = self._make_request("GET", "/interfaces/overview/export", silent=True)
             if result and isinstance(result, dict):
                 interfaces.update(result)
                 logger.debug(f"Got {len(result)} interfaces from overview/export")
-        except Exception as e:
-            logger.debug(f"interfaces/overview/export failed: {e}")
+        except Exception:
+            pass
         
         # Method 2: Try diagnostics/interface/getInterfaceConfig
         try:
-            result = self._make_request("GET", "/diagnostics/interface/getInterfaceConfig")
+            result = self._make_request("GET", "/diagnostics/interface/getInterfaceConfig", silent=True)
             if result and isinstance(result, dict):
                 for iface_name, iface_data in result.items():
                     if iface_name not in interfaces:
                         interfaces[iface_name] = iface_data
                 logger.debug(f"Got {len(result)} interfaces from getInterfaceConfig")
-        except Exception as e:
-            logger.debug(f"diagnostics/interface/getInterfaceConfig failed: {e}")
+        except Exception:
+            pass
         
         # Method 3: Try legacy config endpoint
         try:
-            result = self._make_request("GET", "/diagnostics/interface/getInterfaceNames")
+            result = self._make_request("GET", "/diagnostics/interface/getInterfaceNames", silent=True)
             if result and isinstance(result, dict):
                 for iface_key, iface_name in result.items():
                     if iface_key not in interfaces:
                         interfaces[iface_key] = {'descr': iface_name, 'if': iface_key}
                 logger.debug(f"Got {len(result)} interface names")
-        except Exception as e:
-            logger.debug(f"diagnostics/interface/getInterfaceNames failed: {e}")
+        except Exception:
+            pass
         
         logger.info(f"Total interfaces found: {len(interfaces)} - {list(interfaces.keys())}")
         return interfaces
@@ -136,23 +144,56 @@ class OPNsenseClient:
             return []
 
     def get_dhcp_leases(self) -> List[Dict]:
-        """Get DHCP leases"""
-        try:
-            # Try ISC DHCP (os-dhcp-leases plugin)
-            result = self._make_request("GET", "/dhcpleases/service/get")
-            if result and "leases" in result:
-                return result.get("leases", {}).get("lease", [])
-        except Exception as e:
-            logger.debug(f"Failed to get DHCP leases from dhcpleases: {e}")
+        """Get DHCP leases from various possible endpoints"""
+        leases = []
         
+        # Method 1: ISC DHCP leases plugin (older)
         try:
-            # Try Kea DHCP4 plugin
-            result = self._make_request("GET", "/kea/dhcpv4/search")
-            if result:
-                return result.get("rows", [])
-        except Exception as e:
-            logger.debug(f"Failed to get DHCP leases from Kea: {e}")
+            result = self._make_request("GET", "/dhcpleases/service/get", silent=True)
+            if result and isinstance(result, dict):
+                lease_data = result.get("leases", {})
+                if isinstance(lease_data, dict):
+                    leases = lease_data.get("lease", [])
+                    if leases:
+                        logger.debug(f"Got {len(leases)} leases from dhcpleases plugin")
+                        return leases if isinstance(leases, list) else [leases]
+        except Exception:
+            pass  # Silently try next method
         
+        # Method 2: Kea DHCP4 leases (newer)
+        try:
+            result = self._make_request("POST", "/kea/leases4/search", silent=True)
+            if result and isinstance(result, dict):
+                leases = result.get("rows", [])
+                if leases:
+                    logger.debug(f"Got {len(leases)} leases from Kea leases4")
+                    return leases
+        except Exception:
+            pass
+        
+        # Method 3: Kea DHCP4 search
+        try:
+            result = self._make_request("POST", "/kea/dhcpv4/searchLease", silent=True)
+            if result and isinstance(result, dict):
+                leases = result.get("rows", [])
+                if leases:
+                    logger.debug(f"Got {len(leases)} leases from Kea dhcpv4")
+                    return leases
+        except Exception:
+            pass
+        
+        # Method 4: ISC DHCP service status
+        try:
+            result = self._make_request("GET", "/dhcpv4/leases/searchLease", silent=True)
+            if result and isinstance(result, dict):
+                leases = result.get("rows", [])
+                if leases:
+                    logger.debug(f"Got {len(leases)} leases from dhcpv4")
+                    return leases
+        except Exception:
+            pass
+        
+        logger.debug("No DHCP leases found from any endpoint")
         return []
 
     def get_arp_table(self) -> List[Dict]:
