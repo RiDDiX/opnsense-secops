@@ -193,6 +193,50 @@ class SecurityAuditor:
             return self.scan_manager.is_cancelled()
         return False
 
+    def _get_wan_exposed_ports(self, nat_rules: List[Dict]) -> List[Dict]:
+        """Extract WAN-exposed port forwards from NAT rules"""
+        exposed_ports = []
+        
+        for rule in nat_rules:
+            # Check if this is a port forward rule
+            if not rule.get('enabled', True):
+                continue
+            
+            # Get target/destination info
+            target_ip = rule.get('target', rule.get('destination', {}).get('address', ''))
+            target_port = rule.get('local-port', rule.get('destination', {}).get('port', ''))
+            external_port = rule.get('source', {}).get('port', target_port)
+            protocol = rule.get('protocol', 'tcp')
+            description = rule.get('descr', rule.get('description', ''))
+            
+            # Handle port ranges
+            if target_port and '-' in str(target_port):
+                ports = str(target_port).split('-')
+                try:
+                    for p in range(int(ports[0]), int(ports[1]) + 1):
+                        exposed_ports.append({
+                            'external_port': p,
+                            'internal_port': p,
+                            'internal_ip': target_ip,
+                            'protocol': protocol,
+                            'description': description
+                        })
+                except:
+                    pass
+            elif target_port:
+                try:
+                    exposed_ports.append({
+                        'external_port': int(external_port) if external_port else int(target_port),
+                        'internal_port': int(target_port),
+                        'internal_ip': target_ip,
+                        'protocol': protocol,
+                        'description': description
+                    })
+                except:
+                    pass
+        
+        return exposed_ports
+
     def run_audit(self) -> Dict:
         """Run complete security audit"""
         logger.info("Starting security audit...")
@@ -275,20 +319,21 @@ class SecurityAuditor:
         if self._is_cancelled():
             return results
 
-        # Step 6: Port Scanning
-        if not self._update_progress('Scanning ports on discovered devices...', 6):
+        # Step 6: Port Scanning (WAN-exposed ports only)
+        if not self._update_progress('Checking WAN-exposed ports...', 6):
             return results
         
-        logger.info("Scanning for open ports on discovered devices...")
-        active_hosts = [d.ip for d in devices if d.status == "active"]
-        excluded_hosts = self.config_loader.get_host_exceptions()
-        scan_hosts = [h for h in active_hosts if h not in excluded_hosts]
-
-        logger.info(f"Scanning {len(scan_hosts)} hosts (excluded {len(excluded_hosts)})")
-
-        port_findings = self.port_scanner.scan_network(None, scan_hosts)
+        logger.info("Checking for WAN-exposed ports via NAT rules...")
+        
+        # Get WAN-exposed ports from NAT rules - these are the security concerns
+        wan_exposed_ports = self._get_wan_exposed_ports(nat_rules)
+        logger.info(f"Found {len(wan_exposed_ports)} WAN-exposed port forwards")
+        
+        # Only scan and report ports that are exposed to WAN
+        port_findings = self.port_scanner.scan_wan_exposed(wan_exposed_ports)
         results["port_findings"] = [asdict(f) for f in port_findings]
-        logger.info(f"Found {len(port_findings)} port security issues")
+        results["wan_exposed_ports"] = wan_exposed_ports
+        logger.info(f"Found {len(port_findings)} WAN-exposed port security issues")
 
         # System Security Analysis
         logger.info("Analyzing system security configuration...")

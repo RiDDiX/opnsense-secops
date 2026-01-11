@@ -96,6 +96,73 @@ class PortScanner:
         except ValueError:
             return False
 
+    def scan_wan_exposed(self, wan_exposed_ports: List[Dict]) -> List[PortFinding]:
+        """Check WAN-exposed ports for security issues - only these are flagged"""
+        findings = []
+        
+        if not wan_exposed_ports:
+            logger.info("No WAN-exposed port forwards found - internal ports are not security issues")
+            return findings
+        
+        logger.info(f"Checking {len(wan_exposed_ports)} WAN-exposed port forwards for security issues")
+        
+        for exposed in wan_exposed_ports:
+            port = exposed.get('internal_port') or exposed.get('external_port')
+            internal_ip = exposed.get('internal_ip', '')
+            external_port = exposed.get('external_port', port)
+            description = exposed.get('description', '')
+            protocol = exposed.get('protocol', 'tcp')
+            
+            if not port:
+                continue
+            
+            # Check if this is an excepted port
+            if self._is_port_excepted(port, internal_ip):
+                logger.debug(f"Port {port} on {internal_ip} is excepted")
+                continue
+            
+            # Check if this is a critical port
+            if port in self.critical_ports:
+                port_info = self.critical_ports[port]
+                findings.append(PortFinding(
+                    severity=port_info.get("severity", "HIGH"),
+                    port=port,
+                    service=port_info.get("service", f"Port {port}"),
+                    host=f"WAN:{external_port} -> {internal_ip}:{port}",
+                    issue=f"Critical port {port} ({port_info.get('service', '')}) exposed to WAN",
+                    reason=port_info.get("reason", "This port is accessible from the internet"),
+                    solution=port_info.get("solution", "Consider restricting access or using VPN"),
+                    details={
+                        "internal_ip": internal_ip,
+                        "internal_port": port,
+                        "external_port": external_port,
+                        "protocol": protocol,
+                        "nat_description": description,
+                        "wan_exposed": True
+                    }
+                ))
+            elif port not in self.allowed_ports:
+                # Non-critical but also not explicitly allowed
+                findings.append(PortFinding(
+                    severity="MEDIUM",
+                    port=port,
+                    service=f"Port {port}",
+                    host=f"WAN:{external_port} -> {internal_ip}:{port}",
+                    issue=f"Port {port} exposed to WAN",
+                    reason="This port is accessible from the internet",
+                    solution="Verify this port forward is necessary. Consider using VPN for internal services.",
+                    details={
+                        "internal_ip": internal_ip,
+                        "internal_port": port,
+                        "external_port": external_port,
+                        "protocol": protocol,
+                        "nat_description": description,
+                        "wan_exposed": True
+                    }
+                ))
+        
+        return findings
+
     def _scan_network_range(self, network: str) -> List[PortFinding]:
         """Scan entire network range"""
         findings = []

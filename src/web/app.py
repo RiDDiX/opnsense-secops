@@ -658,6 +658,207 @@ def get_network_selection():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/networks/fetch', methods=['GET'])
+def fetch_networks_from_opnsense():
+    """Fetch and auto-classify networks from OPNsense"""
+    try:
+        import ipaddress
+        
+        host = os.getenv('OPNSENSE_HOST')
+        api_key = os.getenv('OPNSENSE_API_KEY')
+        api_secret = os.getenv('OPNSENSE_API_SECRET')
+        
+        if not all([host, api_key, api_secret]):
+            return jsonify({
+                'success': False,
+                'error': 'OPNsense credentials not configured. Please save API settings first.'
+            }), 400
+        
+        client = OPNsenseClient(host, api_key, api_secret)
+        
+        # Get interfaces
+        interfaces = client.get_interfaces()
+        vlans = client.get_vlans()
+        
+        networks = []
+        
+        # Parse interfaces
+        if isinstance(interfaces, dict):
+            for iface_name, iface_data in interfaces.items():
+                if not isinstance(iface_data, dict):
+                    continue
+                
+                descr = iface_data.get('descr', iface_name)
+                is_wan = 'wan' in descr.lower() or 'pppoe' in descr.lower() or iface_name.lower() == 'wan'
+                
+                # Get IPv4 address
+                ipv4 = iface_data.get('ipv4', [])
+                network_str = None
+                gateway = iface_data.get('gateway', '')
+                
+                if ipv4 and isinstance(ipv4, list):
+                    for addr_info in ipv4:
+                        if isinstance(addr_info, dict):
+                            addr = addr_info.get('ipaddr', '')
+                            subnet = addr_info.get('subnetbits', '24')
+                            if addr and not addr.startswith('127.'):
+                                try:
+                                    net = ipaddress.ip_network(f"{addr}/{subnet}", strict=False)
+                                    network_str = str(net)
+                                    # Auto-detect WAN: public IP or has gateway
+                                    if not net.is_private:
+                                        is_wan = True
+                                except:
+                                    pass
+                
+                # Skip if no network info
+                if not network_str and not gateway:
+                    continue
+                
+                networks.append({
+                    'name': descr,
+                    'interface': iface_name,
+                    'network': network_str,
+                    'gateway': gateway,
+                    'type': 'wan' if is_wan else 'lan',
+                    'vlan_tag': None,
+                    'enabled': iface_data.get('enable', '1') == '1'
+                })
+        
+        # Add VLANs
+        for vlan in vlans:
+            vlan_tag = vlan.get('tag', vlan.get('vlanif', ''))
+            descr = vlan.get('descr', '')
+            parent_if = vlan.get('if', '')
+            
+            networks.append({
+                'name': f"VLAN {vlan_tag}" + (f" ({descr})" if descr else ''),
+                'interface': f"{parent_if}.{vlan_tag}",
+                'network': None,  # VLANs often don't have IP on firewall
+                'gateway': None,
+                'type': 'vlan',
+                'vlan_tag': vlan_tag,
+                'enabled': True
+            })
+        
+        return jsonify({
+            'success': True,
+            'networks': networks
+        })
+    except Exception as e:
+        logger.error(f"Failed to fetch networks: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# Internal device scan state
+internal_scan_state = {
+    'status': 'idle',
+    'current_step': '',
+    'devices': [],
+    'error': None
+}
+
+@app.route('/api/scan/internal', methods=['POST'])
+def start_internal_scan():
+    """Start internal network device scan"""
+    global internal_scan_state
+    
+    if internal_scan_state['status'] == 'running':
+        return jsonify({'success': False, 'error': 'Scan already in progress'}), 400
+    
+    def run_internal_scan():
+        global internal_scan_state
+        try:
+            internal_scan_state['status'] = 'running'
+            internal_scan_state['current_step'] = 'Initializing...'
+            internal_scan_state['devices'] = []
+            internal_scan_state['error'] = None
+            
+            # Load network config
+            config_file = os.path.join(CONFIG_DIR, 'scan_networks.json')
+            networks_to_scan = []
+            
+            if os.path.exists(config_file):
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                # Only scan LAN and VLAN networks (not WAN)
+                for net in config.get('selected_networks', []):
+                    if net.get('type') in ['lan', 'vlan'] and net.get('network'):
+                        networks_to_scan.append(net['network'])
+            
+            if not networks_to_scan:
+                # Fallback to SCAN_NETWORK env var
+                scan_net = os.getenv('SCAN_NETWORK', '192.168.1.0/24')
+                networks_to_scan = [scan_net]
+            
+            internal_scan_state['current_step'] = f'Scanning {len(networks_to_scan)} networks...'
+            
+            # Initialize components
+            config_loader = ConfigLoader(CONFIG_DIR)
+            rules, exceptions = config_loader.load_all()
+            scan_options = config_loader.get_scan_options()
+            
+            from src.analyzers.network_discovery import NetworkDiscovery
+            discovery = NetworkDiscovery(scan_options)
+            
+            internal_scan_state['current_step'] = 'Discovering devices...'
+            
+            # Get DHCP/ARP data if possible
+            dhcp_leases = []
+            arp_table = []
+            try:
+                host = os.getenv('OPNSENSE_HOST')
+                api_key = os.getenv('OPNSENSE_API_KEY')
+                api_secret = os.getenv('OPNSENSE_API_SECRET')
+                if all([host, api_key, api_secret]):
+                    client = OPNsenseClient(host, api_key, api_secret)
+                    dhcp_leases = client.get_dhcp_leases()
+                    arp_table = client.get_arp_table()
+            except:
+                pass
+            
+            # Discover devices
+            devices = discovery.discover_network(networks_to_scan, dhcp_leases, arp_table, [])
+            
+            internal_scan_state['current_step'] = 'Scan completed'
+            internal_scan_state['devices'] = [
+                {
+                    'ip': d.ip,
+                    'mac': d.mac,
+                    'hostname': d.hostname,
+                    'vendor': d.vendor,
+                    'network': d.network,
+                    'vlan': d.vlan,
+                    'status': d.status,
+                    'open_ports': d.open_ports,
+                    'services': d.services,
+                    'os_guess': d.os_guess
+                } for d in devices
+            ]
+            internal_scan_state['status'] = 'completed'
+            
+        except Exception as e:
+            logger.error(f"Internal scan failed: {e}")
+            internal_scan_state['status'] = 'failed'
+            internal_scan_state['error'] = str(e)
+    
+    thread = threading.Thread(target=run_internal_scan)
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({'success': True, 'message': 'Internal scan started'})
+
+
+@app.route('/api/scan/internal/status', methods=['GET'])
+def get_internal_scan_status():
+    """Get internal scan status and results"""
+    global internal_scan_state
+    return jsonify({
+        'success': True,
+        **internal_scan_state
+    })
+
+
 if __name__ == '__main__':
     # Create necessary directories
     os.makedirs(REPORTS_DIR, exist_ok=True)

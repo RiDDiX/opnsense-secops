@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadSecurityScore();
     loadOptimalConfig();
     checkInitialScanStatus();
+    loadSavedNetworkConfig();
 
     // Event listeners
     document.getElementById('start-scan-btn').addEventListener('click', startScan);
@@ -591,4 +592,235 @@ function formatCategoryName(name) {
 
 function formatSettingName(name) {
     return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// Network Classification
+let loadedNetworks = [];
+
+async function loadNetworksFromOPNsense() {
+    const loadBtn = document.getElementById('load-networks-btn');
+    const loadingDiv = document.getElementById('networks-loading');
+    const noNetworksMsg = document.getElementById('no-networks-msg');
+    const networksList = document.getElementById('networks-list');
+    const networkActions = document.getElementById('network-actions');
+    
+    loadBtn.disabled = true;
+    loadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+    loadingDiv.classList.remove('hidden');
+    noNetworksMsg.classList.add('hidden');
+    
+    try {
+        const response = await fetch('/api/networks/fetch');
+        const data = await response.json();
+        
+        if (data.success && data.networks) {
+            loadedNetworks = data.networks;
+            displayNetworksList(data.networks);
+            networksList.classList.remove('hidden');
+            networkActions.classList.remove('hidden');
+            showToast('success', `Loaded ${data.networks.length} networks from OPNsense`);
+        } else {
+            showToast('error', data.error || 'Failed to load networks');
+            noNetworksMsg.classList.remove('hidden');
+        }
+    } catch (e) {
+        showToast('error', 'Failed to connect to OPNsense');
+        noNetworksMsg.classList.remove('hidden');
+    } finally {
+        loadBtn.disabled = false;
+        loadBtn.innerHTML = '<i class="fas fa-sync"></i> Load Networks from OPNsense';
+        loadingDiv.classList.add('hidden');
+    }
+}
+
+function displayNetworksList(networks) {
+    const container = document.getElementById('networks-list');
+    
+    const html = networks.map((net, idx) => {
+        const typeClass = net.type || '';
+        const isVlan = net.vlan_tag ? true : false;
+        
+        return `
+            <div class="network-item ${typeClass}" data-index="${idx}">
+                <div class="network-info">
+                    <div class="network-name">${net.name || net.interface}</div>
+                    <div class="network-details">
+                        <span><i class="fas fa-network-wired"></i> ${net.network || 'N/A'}</span>
+                        <span><i class="fas fa-ethernet"></i> ${net.interface}</span>
+                        ${isVlan ? `<span><i class="fas fa-tag"></i> VLAN ${net.vlan_tag}</span>` : ''}
+                        ${net.gateway ? `<span><i class="fas fa-door-open"></i> GW: ${net.gateway}</span>` : ''}
+                    </div>
+                </div>
+                <div class="network-type-selector">
+                    <button class="type-btn wan ${net.type === 'wan' ? 'active' : ''}" 
+                            onclick="setNetworkType(${idx}, 'wan')">WAN</button>
+                    <button class="type-btn lan ${net.type === 'lan' ? 'active' : ''}" 
+                            onclick="setNetworkType(${idx}, 'lan')">LAN</button>
+                    ${isVlan ? `<button class="type-btn vlan ${net.type === 'vlan' ? 'active' : ''}" 
+                            onclick="setNetworkType(${idx}, 'vlan')">VLAN</button>` : ''}
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    container.innerHTML = html;
+}
+
+function setNetworkType(index, type) {
+    loadedNetworks[index].type = type;
+    displayNetworksList(loadedNetworks);
+}
+
+async function saveNetworkClassification() {
+    try {
+        const response = await fetch('/api/config/networks', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({networks: loadedNetworks})
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            showToast('success', 'Network configuration saved');
+        } else {
+            showToast('error', data.error || 'Failed to save');
+        }
+    } catch (e) {
+        showToast('error', 'Failed to save network configuration');
+    }
+}
+
+// Load saved network configuration on page load
+async function loadSavedNetworkConfig() {
+    try {
+        const response = await fetch('/api/config/networks');
+        const data = await response.json();
+        
+        if (data.success && data.networks && data.networks.length > 0) {
+            loadedNetworks = data.networks;
+            displayNetworksList(data.networks);
+            document.getElementById('networks-list').classList.remove('hidden');
+            document.getElementById('network-actions').classList.remove('hidden');
+            document.getElementById('no-networks-msg').classList.add('hidden');
+        }
+    } catch (e) {
+        console.log('No saved network config');
+    }
+}
+
+// Internal Device Scanning
+async function scanInternalDevices() {
+    const scanBtn = document.getElementById('scan-internal-btn');
+    const loadingDiv = document.getElementById('devices-loading');
+    const statusText = document.getElementById('devices-scan-status');
+    const noDevicesMsg = document.getElementById('no-devices-msg');
+    const summaryDiv = document.getElementById('devices-summary');
+    const tableContainer = document.getElementById('devices-table-container');
+    
+    scanBtn.disabled = true;
+    scanBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Scanning...';
+    loadingDiv.classList.remove('hidden');
+    noDevicesMsg.classList.add('hidden');
+    statusText.textContent = 'Discovering devices...';
+    
+    try {
+        const response = await fetch('/api/scan/internal', {method: 'POST'});
+        const data = await response.json();
+        
+        if (data.success) {
+            // Poll for results
+            pollInternalScanStatus();
+        } else {
+            showToast('error', data.error || 'Failed to start scan');
+            resetDevicesScanUI();
+        }
+    } catch (e) {
+        showToast('error', 'Failed to start internal scan');
+        resetDevicesScanUI();
+    }
+}
+
+async function pollInternalScanStatus() {
+    const statusText = document.getElementById('devices-scan-status');
+    
+    const pollInterval = setInterval(async () => {
+        try {
+            const response = await fetch('/api/scan/internal/status');
+            const data = await response.json();
+            
+            statusText.textContent = data.current_step || 'Scanning...';
+            
+            if (data.status === 'completed') {
+                clearInterval(pollInterval);
+                displayInternalDevices(data.devices || []);
+                showToast('success', `Found ${data.devices?.length || 0} devices`);
+            } else if (data.status === 'failed') {
+                clearInterval(pollInterval);
+                showToast('error', data.error || 'Scan failed');
+                resetDevicesScanUI();
+            }
+        } catch (e) {
+            clearInterval(pollInterval);
+            resetDevicesScanUI();
+        }
+    }, 2000);
+}
+
+function displayInternalDevices(devices) {
+    const summaryDiv = document.getElementById('devices-summary');
+    const tableContainer = document.getElementById('devices-table-container');
+    const tableBody = document.getElementById('devices-table-body');
+    const loadingDiv = document.getElementById('devices-loading');
+    const scanBtn = document.getElementById('scan-internal-btn');
+    const statusText = document.getElementById('devices-scan-status');
+    
+    // Update summary
+    const activeDevices = devices.filter(d => d.status === 'active');
+    const totalPorts = devices.reduce((sum, d) => sum + (d.open_ports?.length || 0), 0);
+    
+    document.getElementById('total-devices-count').textContent = devices.length;
+    document.getElementById('active-devices-count').textContent = activeDevices.length;
+    document.getElementById('total-ports-count').textContent = totalPorts;
+    
+    // Build table
+    tableBody.innerHTML = devices.map(device => {
+        const portsHtml = (device.open_ports || []).map(port => {
+            const isCritical = [22, 23, 3389, 5900, 1433, 3306, 5432, 27017, 6379].includes(port);
+            return `<span class="port-badge ${isCritical ? 'critical' : ''}">${port}</span>`;
+        }).join('') || '<span style="color:#7f8c8d">None</span>';
+        
+        return `
+            <tr>
+                <td><strong>${device.ip}</strong></td>
+                <td>${device.hostname || '-'}</td>
+                <td><code>${device.mac || '-'}</code></td>
+                <td>${device.network || device.vlan || '-'}</td>
+                <td class="${device.status === 'active' ? 'status-active' : 'status-inactive'}">
+                    ${device.status === 'active' ? '● Active' : '○ Inactive'}
+                </td>
+                <td><div class="port-list">${portsHtml}</div></td>
+            </tr>
+        `;
+    }).join('');
+    
+    // Show UI
+    summaryDiv.classList.remove('hidden');
+    tableContainer.classList.remove('hidden');
+    loadingDiv.classList.add('hidden');
+    scanBtn.disabled = false;
+    scanBtn.innerHTML = '<i class="fas fa-search"></i> Scan Internal Networks';
+    statusText.textContent = `Last scan: ${new Date().toLocaleTimeString()}`;
+}
+
+function resetDevicesScanUI() {
+    const scanBtn = document.getElementById('scan-internal-btn');
+    const loadingDiv = document.getElementById('devices-loading');
+    const noDevicesMsg = document.getElementById('no-devices-msg');
+    const statusText = document.getElementById('devices-scan-status');
+    
+    scanBtn.disabled = false;
+    scanBtn.innerHTML = '<i class="fas fa-search"></i> Scan Internal Networks';
+    loadingDiv.classList.add('hidden');
+    noDevicesMsg.classList.remove('hidden');
+    statusText.textContent = '';
 }

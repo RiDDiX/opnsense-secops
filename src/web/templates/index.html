@@ -36,6 +36,10 @@
                 <i class="fas fa-shield-alt"></i>
                 <span data-i18n="optimal_config">Optimal Config</span>
             </a>
+            <a href="#devices" class="nav-item" data-page="devices">
+                <i class="fas fa-desktop"></i>
+                <span>Internal Devices</span>
+            </a>
         </nav>
 
         <div class="sidebar-footer">
@@ -212,15 +216,36 @@
                             <label for="api-secret" data-i18n="api_secret">API Secret</label>
                             <input type="password" id="api-secret" placeholder="">
                         </div>
-                        <div class="form-group">
-                            <label for="scan-network" data-i18n="scan_network">Scan Network</label>
-                            <input type="text" id="scan-network" placeholder="192.168.1.0/24">
-                        </div>
-                        <div class="form-group">
-                            <label for="additional-networks" data-i18n="additional_networks">Additional Networks</label>
-                            <input type="text" id="additional-networks" placeholder="192.168.2.0/24,10.0.0.0/24">
-                        </div>
                     </form>
+                    <div class="form-actions">
+                        <button id="load-networks-btn" class="btn btn-secondary" onclick="loadNetworksFromOPNsense()">
+                            <i class="fas fa-sync"></i> Load Networks from OPNsense
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Network Classification -->
+                <div class="config-section" id="network-classification-section">
+                    <h3><i class="fas fa-network-wired"></i> Network Classification</h3>
+                    <p class="section-description">Classify your networks as WAN (external) or LAN (internal). Only ports exposed from WAN to LAN will be flagged as security issues.</p>
+                    
+                    <div id="networks-loading" class="loading-indicator hidden">
+                        <i class="fas fa-spinner fa-spin"></i> Loading networks...
+                    </div>
+                    
+                    <div id="networks-container">
+                        <div id="no-networks-msg" class="info-message">
+                            <i class="fas fa-info-circle"></i> Click "Load Networks from OPNsense" to fetch available networks.
+                        </div>
+                        
+                        <div id="networks-list" class="networks-list hidden"></div>
+                    </div>
+                    
+                    <div id="network-actions" class="form-actions hidden">
+                        <button id="save-networks-btn" class="btn btn-primary" onclick="saveNetworkClassification()">
+                            <i class="fas fa-save"></i> Save Network Configuration
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Scan Options -->
@@ -328,6 +353,58 @@
             <div class="optimal-config-summary">
                 <h3><i class="fas fa-check-circle"></i> Target Configuration</h3>
                 <div id="optimal-config-details"></div>
+            </div>
+        </div>
+
+        <!-- Internal Devices Page -->
+        <div id="page-devices" class="page">
+            <h2><i class="fas fa-desktop"></i> Internal Network Devices</h2>
+            <p class="page-description">Scan and view all devices in your internal networks with their open ports. This is for informational purposes - internal ports are not security issues unless exposed to WAN.</p>
+            
+            <div class="devices-controls">
+                <button id="scan-internal-btn" class="btn btn-primary" onclick="scanInternalDevices()">
+                    <i class="fas fa-search"></i> Scan Internal Networks
+                </button>
+                <span id="devices-scan-status" class="scan-status-text"></span>
+            </div>
+            
+            <div id="devices-loading" class="loading-indicator hidden">
+                <i class="fas fa-spinner fa-spin"></i> Scanning internal networks...
+            </div>
+            
+            <div id="devices-summary" class="devices-summary hidden">
+                <div class="summary-item">
+                    <span class="label">Total Devices:</span>
+                    <span id="total-devices-count" class="value">0</span>
+                </div>
+                <div class="summary-item">
+                    <span class="label">Active Devices:</span>
+                    <span id="active-devices-count" class="value">0</span>
+                </div>
+                <div class="summary-item">
+                    <span class="label">Open Ports Found:</span>
+                    <span id="total-ports-count" class="value">0</span>
+                </div>
+            </div>
+            
+            <div id="devices-table-container" class="table-container hidden">
+                <table id="devices-table" class="data-table">
+                    <thead>
+                        <tr>
+                            <th>IP Address</th>
+                            <th>Hostname</th>
+                            <th>MAC Address</th>
+                            <th>Network/VLAN</th>
+                            <th>Status</th>
+                            <th>Open Ports</th>
+                        </tr>
+                    </thead>
+                    <tbody id="devices-table-body"></tbody>
+                </table>
+            </div>
+            
+            <div id="no-devices-msg" class="info-message">
+                <i class="fas fa-info-circle"></i> Click "Scan Internal Networks" to discover devices in your LAN.
             </div>
         </div>
     </main>
