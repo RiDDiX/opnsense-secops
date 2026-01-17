@@ -891,11 +891,31 @@ internal_scan_state = {
     'status': 'idle',
     'current_step': '',
     'devices': [],
+    'discovered_hosts': [],  # Live list of discovered IPs
+    'logs': [],  # Console log messages
     'error': None,
-    'started_at': None
+    'started_at': None,
+    'total_hosts': 0,
+    'scanned_hosts': 0
 }
+internal_scan_lock = threading.Lock()
 
 INTERNAL_SCAN_TIMEOUT = 1800  # 30 minutes timeout
+MAX_INTERNAL_LOGS = 200
+
+def internal_scan_log(level: str, message: str):
+    """Add log message to internal scan state"""
+    global internal_scan_state
+    with internal_scan_lock:
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        internal_scan_state['logs'].append({
+            'timestamp': timestamp,
+            'level': level,
+            'message': message
+        })
+        # Keep only last N messages
+        if len(internal_scan_state['logs']) > MAX_INTERNAL_LOGS:
+            internal_scan_state['logs'] = internal_scan_state['logs'][-MAX_INTERNAL_LOGS:]
 
 def is_internal_scan_stuck():
     """Check if internal scan is stuck (running for too long)"""
@@ -908,13 +928,18 @@ def is_internal_scan_stuck():
 def cancel_internal_scan():
     """Cancel/reset internal scan state"""
     global internal_scan_state
-    internal_scan_state = {
-        'status': 'idle',
-        'current_step': '',
-        'devices': [],
-        'error': None,
-        'started_at': None
-    }
+    with internal_scan_lock:
+        internal_scan_state = {
+            'status': 'idle',
+            'current_step': '',
+            'devices': [],
+            'discovered_hosts': [],
+            'logs': [],
+            'error': None,
+            'started_at': None,
+            'total_hosts': 0,
+            'scanned_hosts': 0
+        }
     return jsonify({'success': True, 'message': 'Internal scan cancelled'})
 
 @app.route('/api/scan/internal', methods=['POST'])
@@ -936,11 +961,18 @@ def start_internal_scan():
             import ipaddress
             import nmap
             
-            internal_scan_state['status'] = 'running'
-            internal_scan_state['current_step'] = 'Initializing...'
-            internal_scan_state['devices'] = []
-            internal_scan_state['error'] = None
-            internal_scan_state['started_at'] = time.time()
+            with internal_scan_lock:
+                internal_scan_state['status'] = 'running'
+                internal_scan_state['current_step'] = 'Initializing...'
+                internal_scan_state['devices'] = []
+                internal_scan_state['discovered_hosts'] = []
+                internal_scan_state['logs'] = []
+                internal_scan_state['error'] = None
+                internal_scan_state['started_at'] = time.time()
+                internal_scan_state['total_hosts'] = 0
+                internal_scan_state['scanned_hosts'] = 0
+            
+            internal_scan_log('info', '🚀 Starting internal network device scan...')
             
             # Load network config
             config_file = os.path.join(CONFIG_DIR, 'scan_networks.json')
@@ -953,13 +985,16 @@ def start_internal_scan():
                 for net in config.get('selected_networks', []):
                     if net.get('type') in ['lan', 'vlan'] and net.get('network'):
                         networks_to_scan.append(net['network'])
+                        internal_scan_log('info', f'📋 Added network: {net["network"]} ({net.get("type", "unknown").upper()})')
             
             if not networks_to_scan:
                 # Fallback to SCAN_NETWORK env var
                 scan_net = os.getenv('SCAN_NETWORK', '192.168.1.0/24')
                 networks_to_scan = [scan_net]
+                internal_scan_log('warning', f'⚠️ No networks configured, using fallback: {scan_net}')
             
             internal_scan_state['current_step'] = f'Discovering hosts in {len(networks_to_scan)} networks...'
+            internal_scan_log('info', f'🔍 Will scan {len(networks_to_scan)} network(s)')
             
             # Get DHCP/ARP data if possible
             dhcp_leases = []
@@ -969,11 +1004,13 @@ def start_internal_scan():
                 api_key = os.getenv('OPNSENSE_API_KEY')
                 api_secret = os.getenv('OPNSENSE_API_SECRET')
                 if all([host, api_key, api_secret]):
+                    internal_scan_log('info', '📡 Fetching DHCP leases and ARP table from OPNsense...')
                     client = OPNsenseClient(host, api_key, api_secret)
                     dhcp_leases = client.get_dhcp_leases()
                     arp_table = client.get_arp_table()
-            except:
-                pass
+                    internal_scan_log('success', f'✅ Got {len(dhcp_leases)} DHCP leases, {len(arp_table)} ARP entries')
+            except Exception as e:
+                internal_scan_log('warning', f'⚠️ Could not fetch DHCP/ARP data: {str(e)[:50]}')
             
             # Helper to check if IP is private
             def is_private_ip(ip_str):
@@ -1005,63 +1042,138 @@ def start_internal_scan():
             # Use nmap to discover live hosts and scan ALL ports
             nm = nmap.PortScanner()
             devices = []
+            all_live_hosts = []
             
-            for network in networks_to_scan:
+            # Phase 1: Host Discovery
+            internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+            internal_scan_log('info', '📡 PHASE 1: Host Discovery')
+            internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+            
+            for net_idx, network in enumerate(networks_to_scan):
                 internal_scan_state['current_step'] = f'Host discovery: {network}'
+                internal_scan_log('info', f'🔎 Scanning network {net_idx+1}/{len(networks_to_scan)}: {network}')
                 
                 # First find live hosts with ping scan
                 try:
                     nm.scan(hosts=network, arguments='-sn')
                     live_hosts = [h for h in nm.all_hosts() if is_private_ip(h)]
+                    internal_scan_log('success', f'   ✅ Found {len(live_hosts)} live hosts in {network}')
+                    
+                    # Add discovered hosts to live list
+                    for host_ip in live_hosts:
+                        host_info = known_hosts.get(host_ip, {})
+                        hostname = host_info.get('hostname', '')
+                        display_name = f"{host_ip} ({hostname})" if hostname else host_ip
+                        internal_scan_log('info', f'   📍 Discovered: {display_name}')
+                        
+                        with internal_scan_lock:
+                            internal_scan_state['discovered_hosts'].append({
+                                'ip': host_ip,
+                                'hostname': hostname,
+                                'network': network,
+                                'status': 'pending'
+                            })
+                        all_live_hosts.append((host_ip, network))
+                        
                 except Exception as e:
+                    internal_scan_log('error', f'   ❌ Host discovery failed: {str(e)[:50]}')
                     logger.error(f"Host discovery failed for {network}: {e}")
                     continue
+            
+            total_hosts = len(all_live_hosts)
+            with internal_scan_lock:
+                internal_scan_state['total_hosts'] = total_hosts
+            
+            internal_scan_log('info', f'📊 Total hosts to scan: {total_hosts}')
+            
+            # Phase 2: Port Scanning
+            internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+            internal_scan_log('info', '🔓 PHASE 2: Port Scanning (1-65535)')
+            internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+            
+            for i, (host_ip, network) in enumerate(all_live_hosts):
+                with internal_scan_lock:
+                    internal_scan_state['scanned_hosts'] = i
+                internal_scan_state['current_step'] = f'Scanning ports on {host_ip} ({i+1}/{total_hosts})'
                 
-                # Full port scan on each live host (1-65535)
-                for i, host_ip in enumerate(live_hosts):
-                    internal_scan_state['current_step'] = f'Scanning ports on {host_ip} ({i+1}/{len(live_hosts)})'
+                host_info = known_hosts.get(host_ip, {})
+                hostname = host_info.get('hostname', '')
+                display_name = f"{host_ip} ({hostname})" if hostname else host_ip
+                
+                internal_scan_log('info', f'🖥️  [{i+1}/{total_hosts}] Scanning: {display_name}')
+                
+                device = {
+                    'ip': host_ip,
+                    'mac': host_info.get('mac', ''),
+                    'hostname': hostname,
+                    'network': network,
+                    'vlan': '',
+                    'status': 'active',
+                    'open_ports': [],
+                    'services': {}
+                }
+                
+                try:
+                    # Full port scan (1-65535) with service detection
+                    scan_start = time.time()
+                    nm.scan(hosts=host_ip, arguments='-sS -p 1-65535 --min-rate=1000 -T4')
+                    scan_duration = time.time() - scan_start
                     
-                    host_info = known_hosts.get(host_ip, {})
-                    device = {
-                        'ip': host_ip,
-                        'mac': host_info.get('mac', ''),
-                        'hostname': host_info.get('hostname', ''),
-                        'network': network,
-                        'vlan': '',
-                        'status': 'active',
-                        'open_ports': [],
-                        'services': {}
-                    }
-                    
-                    try:
-                        # Full port scan (1-65535) with service detection
-                        nm.scan(hosts=host_ip, arguments='-sS -p 1-65535 --min-rate=1000 -T4')
+                    if host_ip in nm.all_hosts():
+                        # Get hostname from scan if not known
+                        if not device['hostname'] and 'hostnames' in nm[host_ip]:
+                            for h in nm[host_ip]['hostnames']:
+                                if h.get('name'):
+                                    device['hostname'] = h['name']
+                                    break
                         
-                        if host_ip in nm.all_hosts():
-                            # Get hostname from scan if not known
-                            if not device['hostname'] and 'hostnames' in nm[host_ip]:
-                                for h in nm[host_ip]['hostnames']:
-                                    if h.get('name'):
-                                        device['hostname'] = h['name']
-                                        break
+                        # Get MAC from scan if not known
+                        if not device['mac'] and 'addresses' in nm[host_ip]:
+                            device['mac'] = nm[host_ip]['addresses'].get('mac', '')
+                        
+                        # Get open ports
+                        if 'tcp' in nm[host_ip]:
+                            for port, port_info in nm[host_ip]['tcp'].items():
+                                if port_info['state'] == 'open':
+                                    device['open_ports'].append(port)
+                                    service_name = port_info.get('name', 'unknown')
+                                    device['services'][port] = service_name
+                        
+                        port_count = len(device['open_ports'])
+                        if port_count > 0:
+                            port_list = ', '.join(str(p) for p in sorted(device['open_ports'])[:10])
+                            if port_count > 10:
+                                port_list += f' (+{port_count - 10} more)'
+                            internal_scan_log('success', f'   ✅ {port_count} open ports: {port_list} ({scan_duration:.1f}s)')
+                        else:
+                            internal_scan_log('info', f'   ℹ️  No open ports found ({scan_duration:.1f}s)')
                             
-                            # Get MAC from scan if not known
-                            if not device['mac'] and 'addresses' in nm[host_ip]:
-                                device['mac'] = nm[host_ip]['addresses'].get('mac', '')
-                            
-                            # Get open ports
-                            if 'tcp' in nm[host_ip]:
-                                for port, port_info in nm[host_ip]['tcp'].items():
-                                    if port_info['state'] == 'open':
-                                        device['open_ports'].append(port)
-                                        device['services'][port] = port_info.get('name', 'unknown')
-                    except Exception as e:
-                        logger.error(f"Port scan failed for {host_ip}: {e}")
-                    
-                    devices.append(device)
+                except Exception as e:
+                    internal_scan_log('error', f'   ❌ Scan failed: {str(e)[:50]}')
+                    logger.error(f"Port scan failed for {host_ip}: {e}")
+                
+                devices.append(device)
+                
+                # Update devices list in real-time
+                with internal_scan_lock:
+                    internal_scan_state['devices'] = devices.copy()
+                    internal_scan_state['scanned_hosts'] = i + 1
+                    # Update discovered host status
+                    for dh in internal_scan_state['discovered_hosts']:
+                        if dh['ip'] == host_ip:
+                            dh['status'] = 'completed'
+                            dh['open_ports'] = len(device['open_ports'])
+                            break
+            
+            # Scan complete
+            internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+            internal_scan_log('success', f'🎉 Scan completed! Found {len(devices)} devices')
+            total_ports = sum(len(d['open_ports']) for d in devices)
+            internal_scan_log('info', f'📊 Total open ports found: {total_ports}')
+            internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
             
             internal_scan_state['current_step'] = 'Scan completed'
-            internal_scan_state['devices'] = devices  # Already dicts
+            internal_scan_state['devices'] = devices
             internal_scan_state['status'] = 'completed'
             
         except Exception as e:

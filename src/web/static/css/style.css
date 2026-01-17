@@ -1421,3 +1421,205 @@ body {
     color: #7f8c8d;
     margin-right: 0.5rem;
 }
+
+/* Internal Network Scan Progress Styles */
+.internal-scan-progress {
+    background: #f8f9fa;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+}
+
+.scan-progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.scan-progress-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+.scan-progress-info i {
+    color: #3498db;
+    font-size: 1.2rem;
+}
+
+.scan-progress-stats {
+    font-size: 0.9rem;
+    color: #7f8c8d;
+    font-weight: 500;
+}
+
+.scan-progress-bar {
+    height: 8px;
+    background: #e0e0e0;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+}
+
+.scan-progress-bar .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #3498db, #2ecc71);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.internal-scan-panels {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+@media (max-width: 900px) {
+    .internal-scan-panels {
+        grid-template-columns: 1fr;
+    }
+}
+
+.discovered-hosts-panel,
+.console-panel {
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.discovered-hosts-panel h4,
+.console-panel h4 {
+    margin: 0;
+    padding: 0.75rem 1rem;
+    background: #f0f0f0;
+    font-size: 0.9rem;
+    color: #2c3e50;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.discovered-hosts-panel h4 i,
+.console-panel h4 i {
+    margin-right: 0.5rem;
+    color: #7f8c8d;
+}
+
+.discovered-hosts-list {
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 0.5rem;
+}
+
+.no-hosts-yet {
+    padding: 2rem;
+    text-align: center;
+    color: #95a5a6;
+    font-style: italic;
+}
+
+.discovered-host {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    margin-bottom: 0.25rem;
+    font-size: 0.85rem;
+    transition: background 0.2s;
+}
+
+.discovered-host:hover {
+    background: #f8f9fa;
+}
+
+.discovered-host.pending {
+    background: #fff8e6;
+}
+
+.discovered-host.completed {
+    background: #e8f8f0;
+}
+
+.discovered-host .status-done {
+    color: #27ae60;
+}
+
+.discovered-host .status-scanning {
+    color: #3498db;
+}
+
+.discovered-host .host-ip {
+    font-family: monospace;
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.discovered-host .host-name {
+    color: #7f8c8d;
+    font-size: 0.8rem;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.discovered-host .host-ports {
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    background: #3498db;
+    color: white;
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+.discovered-host .host-ports.scanning {
+    background: #95a5a6;
+    font-style: italic;
+}
+
+.internal-scan-console {
+    height: 300px;
+    overflow-y: auto;
+    padding: 0.75rem;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    color: #00ff00;
+    background: #1a1a2e;
+}
+
+.internal-scan-console .console-line {
+    margin-bottom: 0.2rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.internal-scan-console .console-time {
+    color: #7f8c8d;
+    margin-right: 0.5rem;
+}
+
+.internal-scan-console .console-info {
+    color: #3498db;
+}
+
+.internal-scan-console .console-success {
+    color: #2ecc71;
+}
+
+.internal-scan-console .console-warning {
+    color: #f39c12;
+}
+
+.internal-scan-console .console-error {
+    color: #e74c3c;
+}
+
+.internal-scan-progress .btn-danger {
+    margin-top: 0.5rem;
+}

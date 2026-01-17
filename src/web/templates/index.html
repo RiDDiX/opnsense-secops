@@ -374,8 +374,40 @@
                 <span id="devices-scan-status" class="scan-status-text"></span>
             </div>
             
-            <div id="devices-loading" class="loading-indicator hidden">
-                <i class="fas fa-spinner fa-spin"></i> Scanning internal networks...
+            <div id="devices-scan-progress" class="internal-scan-progress hidden">
+                <div class="scan-progress-header">
+                    <div class="scan-progress-info">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        <span id="devices-progress-text">Initializing...</span>
+                    </div>
+                    <div class="scan-progress-stats">
+                        <span id="devices-hosts-progress">0 / 0 hosts</span>
+                    </div>
+                </div>
+                
+                <div class="scan-progress-bar">
+                    <div id="devices-progress-fill" class="progress-fill" style="width: 0%"></div>
+                </div>
+                
+                <div class="internal-scan-panels">
+                    <!-- Discovered Hosts Panel -->
+                    <div class="discovered-hosts-panel">
+                        <h4><i class="fas fa-server"></i> Discovered Hosts</h4>
+                        <div id="discovered-hosts-list" class="discovered-hosts-list">
+                            <div class="no-hosts-yet">Waiting for host discovery...</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Console Output Panel -->
+                    <div class="console-panel">
+                        <h4><i class="fas fa-terminal"></i> Scan Console</h4>
+                        <div id="internal-scan-console" class="internal-scan-console"></div>
+                    </div>
+                </div>
+                
+                <button class="btn btn-danger btn-sm" onclick="cancelInternalScan()">
+                    <i class="fas fa-stop"></i> Cancel Scan
+                </button>
             </div>
             
             <div id="devices-summary" class="devices-summary hidden">

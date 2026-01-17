@@ -785,19 +785,31 @@ async function loadSavedNetworkConfig() {
 }
 
 // Internal Device Scanning
+let internalScanLogCount = 0;
+
 async function scanInternalDevices() {
     const scanBtn = document.getElementById('scan-internal-btn');
-    const loadingDiv = document.getElementById('devices-loading');
+    const progressDiv = document.getElementById('devices-scan-progress');
     const statusText = document.getElementById('devices-scan-status');
     const noDevicesMsg = document.getElementById('no-devices-msg');
     const summaryDiv = document.getElementById('devices-summary');
     const tableContainer = document.getElementById('devices-table-container');
+    const consoleDiv = document.getElementById('internal-scan-console');
+    const hostsList = document.getElementById('discovered-hosts-list');
     
+    // Reset UI
     scanBtn.disabled = true;
     scanBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Scanning...';
-    loadingDiv.classList.remove('hidden');
+    progressDiv.classList.remove('hidden');
     noDevicesMsg.classList.add('hidden');
-    statusText.textContent = 'Discovering devices...';
+    summaryDiv.classList.add('hidden');
+    tableContainer.classList.add('hidden');
+    statusText.textContent = 'Starting scan...';
+    
+    // Reset console and hosts list
+    consoleDiv.innerHTML = '';
+    hostsList.innerHTML = '<div class="no-hosts-yet">Waiting for host discovery...</div>';
+    internalScanLogCount = 0;
     
     try {
         const response = await fetch('/api/scan/internal', {method: 'POST'});
@@ -816,18 +828,50 @@ async function scanInternalDevices() {
     }
 }
 
+async function cancelInternalScan() {
+    try {
+        await fetch('/api/scan/internal/cancel', {method: 'POST'});
+        showToast('info', 'Scan cancelled');
+        resetDevicesScanUI();
+    } catch (e) {
+        showToast('error', 'Failed to cancel scan');
+    }
+}
+
 async function pollInternalScanStatus() {
     const statusText = document.getElementById('devices-scan-status');
+    const progressText = document.getElementById('devices-progress-text');
+    const hostsProgress = document.getElementById('devices-hosts-progress');
+    const progressFill = document.getElementById('devices-progress-fill');
     
     const pollInterval = setInterval(async () => {
         try {
             const response = await fetch('/api/scan/internal/status');
             const data = await response.json();
             
+            // Update status text
             statusText.textContent = data.current_step || 'Scanning...';
+            progressText.textContent = data.current_step || 'Scanning...';
+            
+            // Update progress
+            const total = data.total_hosts || 0;
+            const scanned = data.scanned_hosts || 0;
+            hostsProgress.textContent = `${scanned} / ${total} hosts`;
+            
+            if (total > 0) {
+                const percent = Math.round((scanned / total) * 100);
+                progressFill.style.width = `${percent}%`;
+            }
+            
+            // Update console output
+            updateInternalScanConsole(data.logs || []);
+            
+            // Update discovered hosts list
+            updateDiscoveredHostsList(data.discovered_hosts || []);
             
             if (data.status === 'completed') {
                 clearInterval(pollInterval);
+                progressFill.style.width = '100%';
                 displayInternalDevices(data.devices || []);
                 showToast('success', `Found ${data.devices?.length || 0} devices`);
             } else if (data.status === 'failed') {
@@ -839,14 +883,80 @@ async function pollInternalScanStatus() {
             clearInterval(pollInterval);
             resetDevicesScanUI();
         }
-    }, 2000);
+    }, 1000);  // Poll every second for more responsive updates
+}
+
+function updateInternalScanConsole(logs) {
+    const consoleDiv = document.getElementById('internal-scan-console');
+    if (!consoleDiv || logs.length === internalScanLogCount) return;
+    
+    // Add only new logs
+    const newLogs = logs.slice(internalScanLogCount);
+    
+    newLogs.forEach(log => {
+        const line = document.createElement('div');
+        line.className = `console-line console-${log.level}`;
+        line.innerHTML = `<span class="console-time">[${log.timestamp}]</span> ${escapeHtml(log.message)}`;
+        consoleDiv.appendChild(line);
+    });
+    
+    internalScanLogCount = logs.length;
+    
+    // Auto-scroll to bottom
+    consoleDiv.scrollTop = consoleDiv.scrollHeight;
+}
+
+function updateDiscoveredHostsList(hosts) {
+    const hostsList = document.getElementById('discovered-hosts-list');
+    if (!hostsList || hosts.length === 0) return;
+    
+    // Clear "waiting" message
+    if (hostsList.querySelector('.no-hosts-yet')) {
+        hostsList.innerHTML = '';
+    }
+    
+    // Update or add host entries
+    hosts.forEach(host => {
+        let hostEl = hostsList.querySelector(`[data-ip="${host.ip}"]`);
+        
+        if (!hostEl) {
+            hostEl = document.createElement('div');
+            hostEl.className = 'discovered-host';
+            hostEl.setAttribute('data-ip', host.ip);
+            hostsList.appendChild(hostEl);
+        }
+        
+        const statusIcon = host.status === 'completed' ? 
+            '<i class="fas fa-check-circle status-done"></i>' : 
+            '<i class="fas fa-spinner fa-spin status-scanning"></i>';
+        
+        const portsInfo = host.status === 'completed' ? 
+            `<span class="host-ports">${host.open_ports || 0} ports</span>` : 
+            '<span class="host-ports scanning">scanning...</span>';
+        
+        const hostname = host.hostname ? `<span class="host-name">${escapeHtml(host.hostname)}</span>` : '';
+        
+        hostEl.innerHTML = `
+            ${statusIcon}
+            <span class="host-ip">${host.ip}</span>
+            ${hostname}
+            ${portsInfo}
+        `;
+        hostEl.className = `discovered-host ${host.status}`;
+    });
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 function displayInternalDevices(devices) {
     const summaryDiv = document.getElementById('devices-summary');
     const tableContainer = document.getElementById('devices-table-container');
     const tableBody = document.getElementById('devices-table-body');
-    const loadingDiv = document.getElementById('devices-loading');
+    const progressDiv = document.getElementById('devices-scan-progress');
     const scanBtn = document.getElementById('scan-internal-btn');
     const statusText = document.getElementById('devices-scan-status');
     
@@ -882,7 +992,7 @@ function displayInternalDevices(devices) {
     // Show UI
     summaryDiv.classList.remove('hidden');
     tableContainer.classList.remove('hidden');
-    loadingDiv.classList.add('hidden');
+    progressDiv.classList.add('hidden');
     scanBtn.disabled = false;
     scanBtn.innerHTML = '<i class="fas fa-search"></i> Scan Internal Networks';
     statusText.textContent = `Last scan: ${new Date().toLocaleTimeString()}`;
@@ -890,13 +1000,13 @@ function displayInternalDevices(devices) {
 
 function resetDevicesScanUI() {
     const scanBtn = document.getElementById('scan-internal-btn');
-    const loadingDiv = document.getElementById('devices-loading');
+    const progressDiv = document.getElementById('devices-scan-progress');
     const noDevicesMsg = document.getElementById('no-devices-msg');
     const statusText = document.getElementById('devices-scan-status');
     
     scanBtn.disabled = false;
     scanBtn.innerHTML = '<i class="fas fa-search"></i> Scan Internal Networks';
-    loadingDiv.classList.add('hidden');
+    progressDiv.classList.add('hidden');
     noDevicesMsg.classList.remove('hidden');
     statusText.textContent = '';
 }
