@@ -3,52 +3,50 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OPNsense Security Auditor</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>NetSec Auditor // OPNsense Security Operations</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/netsec.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 </head>
 <body>
-    <!-- Sidebar Navigation -->
     <aside class="sidebar">
         <div class="logo">
-            <i class="fas fa-shield-alt"></i>
-            <h1>OPNsense<br><span>Security Auditor</span></h1>
+            <i class="fas fa-shield-halved"></i>
+            <h1>NetSec<span>Auditor v2.4</span></h1>
         </div>
 
         <nav class="nav-menu">
             <a href="#dashboard" class="nav-item active" data-page="dashboard">
-                <i class="fas fa-home"></i>
-                <span data-i18n="dashboard">Dashboard</span>
+                <i class="fas fa-chart-line"></i>
+                <span data-i18n="dashboard">Overview</span>
             </a>
             <a href="#configuration" class="nav-item" data-page="configuration">
-                <i class="fas fa-cog"></i>
-                <span data-i18n="configuration">Configuration</span>
+                <i class="fas fa-sliders"></i>
+                <span data-i18n="configuration">Settings</span>
             </a>
             <a href="#reports" class="nav-item" data-page="reports">
-                <i class="fas fa-file-alt"></i>
+                <i class="fas fa-file-lines"></i>
                 <span data-i18n="reports">Reports</span>
             </a>
             <a href="#ignore-list" class="nav-item" data-page="ignore-list">
-                <i class="fas fa-list"></i>
-                <span data-i18n="ignore_list">Ignore List</span>
+                <i class="fas fa-filter"></i>
+                <span data-i18n="ignore_list">Exclusions</span>
             </a>
             <a href="#optimal-config" class="nav-item" data-page="optimal-config">
-                <i class="fas fa-shield-alt"></i>
-                <span data-i18n="optimal_config">Optimal Config</span>
+                <i class="fas fa-bullseye"></i>
+                <span data-i18n="optimal_config">Hardening</span>
             </a>
             <a href="#devices" class="nav-item" data-page="devices">
-                <i class="fas fa-desktop"></i>
-                <span>Internal Devices</span>
+                <i class="fas fa-network-wired"></i>
+                <span>Asset Discovery</span>
             </a>
         </nav>
 
         <div class="sidebar-footer">
-            <div class="language-selector">
-                <select id="language-select">
-                    <option value="en">English</option>
-                    <option value="de">Deutsch</option>
-                </select>
-            </div>
+            <select id="language-select">
+                <option value="en">EN</option>
+                <option value="de">DE</option>
+            </select>
         </div>
     </aside>
 
@@ -447,10 +445,7 @@
         </div>
     </main>
 
-    <!-- Toast Notifications -->
     <div id="toast-container"></div>
-
-    <!-- Scripts -->
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/netsec.js') }}"></script>
 </body>
 </html>

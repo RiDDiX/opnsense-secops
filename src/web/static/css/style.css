@@ -1,28 +1,59 @@
-/* OPNsense Security Auditor - Dashboard Styles */
+/* NetSec Auditor // v2.4.1 */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-    --primary: #3498db;
-    --critical: #e74c3c;
-    --high: #e67e22;
-    --medium: #f39c12;
-    --low: #95a5a6;
-    --success: #27ae60;
-    --dark: #2c3e50;
-    --light: #ecf0f1;
-    --sidebar-width: 260px;
+    --bg-primary: #0a0e17;
+    --bg-secondary: #111827;
+    --bg-card: #1a2235;
+    --bg-elevated: #232d42;
+    --border-color: #2a3a55;
+    --border-glow: #00d4ff33;
+    
+    --text-primary: #e4e8ef;
+    --text-secondary: #8b95a8;
+    --text-muted: #5c6778;
+    
+    --accent-cyan: #00d4ff;
+    --accent-green: #00ff88;
+    --accent-orange: #ff8c00;
+    --accent-red: #ff3366;
+    --accent-purple: #a855f7;
+    --accent-yellow: #fbbf24;
+    
+    --severity-critical: #ff3366;
+    --severity-high: #ff8c00;
+    --severity-medium: #fbbf24;
+    --severity-low: #64748b;
+    
+    --glow-cyan: 0 0 20px #00d4ff40;
+    --glow-green: 0 0 20px #00ff8840;
+    --glow-red: 0 0 20px #ff336640;
+    
+    --sidebar-w: 72px;
+    --sidebar-expanded: 240px;
+    --header-h: 64px;
+    
+    --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
 }
 
+html { font-size: 14px; }
+
 body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: #f5f6fa;
-    display: flex;
+    font-family: var(--font-sans);
+    background: var(--bg-primary);
+    color: var(--text-primary);
     min-height: 100vh;
+    display: flex;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
 }
 
 /* Sidebar */
