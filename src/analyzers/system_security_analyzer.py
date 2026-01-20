@@ -1,6 +1,6 @@
 """
 System Security Analyzer
-Analyzes OPNsense system security settings including SSH, admin interface, IDS, VPN, updates
+Analyzes OPNsense system security settings
 """
 import logging
 from typing import Dict, List
@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SystemSecurityFinding:
-    """Represents a system security finding"""
     severity: str
     category: str
     check: str
@@ -19,6 +18,7 @@ class SystemSecurityFinding:
     reason: str
     solution: str
     details: Dict
+    opnsense_path: str = ""
 
 
 class SystemSecurityAnalyzer:
@@ -38,6 +38,10 @@ class SystemSecurityAnalyzer:
         findings.extend(self._analyze_update_config(system_config.get("firmware", {})))
         findings.extend(self._analyze_general_settings(system_config.get("general", {})))
         findings.extend(self._analyze_authentication(system_config.get("auth", {})))
+        findings.extend(self._analyze_vpn_config(system_config.get("vpn", {})))
+        findings.extend(self._analyze_logging_config(system_config.get("logging", {})))
+        findings.extend(self._analyze_cron_backup(system_config.get("cron", {})))
+        findings.extend(self._analyze_captive_portal(system_config.get("captiveportal", {})))
 
         return findings
 
@@ -48,60 +52,59 @@ class SystemSecurityAnalyzer:
         if not ssh_config:
             return findings
 
-        # Check if SSH is enabled
         ssh_enabled = ssh_config.get("enabled", "0") == "1"
 
         if ssh_enabled:
-            # Check for root login
             root_login = ssh_config.get("permitrootlogin", "0") == "1"
             if root_login:
                 findings.append(SystemSecurityFinding(
                     severity="HIGH",
                     category="SSH",
                     check="ssh_root_login",
-                    issue="SSH root login is enabled",
-                    reason="Direct root login via SSH is a security risk",
-                    solution="Disable root login in System > Settings > Administration > Secure Shell",
-                    details={"current": "enabled", "recommended": "disabled"}
+                    issue="SSH Root-Login aktiviert",
+                    reason="Direkter Root-Zugang ist ein Sicherheitsrisiko",
+                    solution="Deaktiviere Root-Login, nutze sudo",
+                    details={"current": "enabled"},
+                    opnsense_path="System > Settings > Administration > Secure Shell"
                 ))
 
-            # Check for password authentication
             password_auth = ssh_config.get("passwordauth", "0") == "1"
             if password_auth:
                 findings.append(SystemSecurityFinding(
                     severity="MEDIUM",
                     category="SSH",
                     check="ssh_password_auth",
-                    issue="SSH password authentication is enabled",
-                    reason="Key-based authentication is more secure than passwords",
-                    solution="Use SSH keys and disable password authentication",
-                    details={"current": "password", "recommended": "key-based"}
+                    issue="SSH Passwort-Authentifizierung aktiviert",
+                    reason="Key-basierte Auth ist sicherer als Passwörter",
+                    solution="Nutze SSH-Keys und deaktiviere Passwort-Auth",
+                    details={"current": "password"},
+                    opnsense_path="System > Settings > Administration > Secure Shell"
                 ))
 
-            # Check SSH port
             ssh_port = ssh_config.get("port", "22")
             if ssh_port == "22":
                 findings.append(SystemSecurityFinding(
                     severity="LOW",
                     category="SSH",
                     check="ssh_default_port",
-                    issue="SSH is running on default port 22",
-                    reason="Using a non-standard port reduces automated attack attempts",
-                    solution="Consider changing SSH port to a non-standard port",
-                    details={"current_port": 22, "recommended": "non-standard port"}
+                    issue="SSH auf Standard-Port 22",
+                    reason="Nicht-Standard-Port reduziert automatisierte Angriffe",
+                    solution="Port auf z.B. 2222 ändern",
+                    details={"current_port": 22},
+                    opnsense_path="System > Settings > Administration > Secure Shell"
                 ))
 
-            # Check if SSH listens on all interfaces
             ssh_interfaces = ssh_config.get("interfaces", [])
             if not ssh_interfaces or "wan" in str(ssh_interfaces).lower():
                 findings.append(SystemSecurityFinding(
                     severity="CRITICAL",
                     category="SSH",
                     check="ssh_wan_access",
-                    issue="SSH may be accessible from WAN",
-                    reason="SSH should never be directly accessible from the internet",
-                    solution="Restrict SSH to LAN/Management interfaces only",
-                    details={"interfaces": ssh_interfaces}
+                    issue="SSH möglicherweise von WAN erreichbar",
+                    reason="SSH darf nie direkt aus dem Internet erreichbar sein",
+                    solution="SSH nur auf LAN/Management beschränken",
+                    details={"interfaces": ssh_interfaces},
+                    opnsense_path="System > Settings > Administration > Secure Shell"
                 ))
 
         return findings
@@ -336,6 +339,228 @@ class SystemSecurityAnalyzer:
                 details={"current_threshold": lockout_threshold, "recommended": "3-5"}
             ))
 
+        return findings
+
+    def _analyze_vpn_config(self, vpn_config: Dict) -> List[SystemSecurityFinding]:
+        """Analyze VPN configuration"""
+        findings = []
+        
+        if not vpn_config:
+            return findings
+        
+        # OpenVPN checks
+        openvpn = vpn_config.get("openvpn", {})
+        for server in openvpn.get("servers", []):
+            # Check cipher strength
+            cipher = server.get("cipher", "")
+            weak_ciphers = ["DES", "RC4", "BF-CBC", "CAST5"]
+            if any(weak in cipher.upper() for weak in weak_ciphers):
+                findings.append(SystemSecurityFinding(
+                    severity="HIGH",
+                    category="VPN",
+                    check="vpn_weak_cipher",
+                    issue=f"OpenVPN Server nutzt schwache Verschlüsselung: {cipher}",
+                    reason="Schwache Cipher sind anfällig für Angriffe",
+                    solution="Nutze AES-256-GCM oder CHACHA20-POLY1305",
+                    details={"cipher": cipher},
+                    opnsense_path="VPN > OpenVPN > Servers"
+                ))
+            
+            # Check auth digest
+            auth = server.get("auth", "")
+            if auth.upper() in ["MD5", "SHA1"]:
+                findings.append(SystemSecurityFinding(
+                    severity="MEDIUM",
+                    category="VPN",
+                    check="vpn_weak_auth",
+                    issue=f"OpenVPN nutzt schwachen Hash-Algorithmus: {auth}",
+                    reason="MD5/SHA1 sind veraltet und unsicher",
+                    solution="Nutze SHA256 oder SHA512",
+                    details={"auth": auth},
+                    opnsense_path="VPN > OpenVPN > Servers"
+                ))
+            
+            # Check TLS auth
+            tls_auth = server.get("tls_auth", "0") == "1"
+            if not tls_auth:
+                findings.append(SystemSecurityFinding(
+                    severity="MEDIUM",
+                    category="VPN",
+                    check="vpn_no_tls_auth",
+                    issue="OpenVPN TLS-Auth nicht aktiviert",
+                    reason="TLS-Auth schützt vor DoS und unauthorized scanning",
+                    solution="Aktiviere TLS Authentication",
+                    details={"tls_auth": "disabled"},
+                    opnsense_path="VPN > OpenVPN > Servers > Cryptographic Settings"
+                ))
+        
+        # IPsec checks
+        ipsec = vpn_config.get("ipsec", {})
+        if ipsec.get("enabled", "0") == "1":
+            # Check Phase 1 proposals
+            for p1 in ipsec.get("phase1", []):
+                enc = p1.get("encryption", "")
+                if "3des" in enc.lower() or "des" in enc.lower():
+                    findings.append(SystemSecurityFinding(
+                        severity="HIGH",
+                        category="VPN",
+                        check="ipsec_weak_enc",
+                        issue="IPsec Phase 1 nutzt schwache Verschlüsselung",
+                        reason="DES/3DES sind veraltet",
+                        solution="Nutze AES-256",
+                        details={"encryption": enc},
+                        opnsense_path="VPN > IPsec > Tunnel Settings"
+                    ))
+        
+        # WireGuard checks
+        wireguard = vpn_config.get("wireguard", {})
+        if wireguard.get("enabled", "0") == "1":
+            for peer in wireguard.get("peers", []):
+                # Check if keepalive is set for NAT traversal
+                keepalive = peer.get("keepalive", 0)
+                if not keepalive:
+                    findings.append(SystemSecurityFinding(
+                        severity="LOW",
+                        category="VPN",
+                        check="wg_no_keepalive",
+                        issue="WireGuard Peer ohne Keepalive",
+                        reason="Keepalive hilft bei NAT-Traversal",
+                        solution="Setze Persistent Keepalive auf 25 Sekunden",
+                        details={"peer": peer.get("name", "unknown")},
+                        opnsense_path="VPN > WireGuard > Peers"
+                    ))
+        
+        return findings
+
+    def _analyze_logging_config(self, logging_config: Dict) -> List[SystemSecurityFinding]:
+        """Analyze logging configuration"""
+        findings = []
+        
+        if not logging_config:
+            # No logging config means defaults
+            findings.append(SystemSecurityFinding(
+                severity="MEDIUM",
+                category="Logging",
+                check="logging_not_configured",
+                issue="Logging nicht explizit konfiguriert",
+                reason="Logs sind essentiell für Security Monitoring",
+                solution="Konfiguriere Logging-Einstellungen",
+                details={},
+                opnsense_path="System > Settings > Logging"
+            ))
+            return findings
+        
+        # Check remote syslog
+        remote_syslog = logging_config.get("remote_syslog", {})
+        if not remote_syslog.get("enabled", False):
+            findings.append(SystemSecurityFinding(
+                severity="LOW",
+                category="Logging",
+                check="no_remote_syslog",
+                issue="Kein Remote-Syslog konfiguriert",
+                reason="Remote-Logging schützt Logs vor lokaler Manipulation",
+                solution="Konfiguriere Remote-Syslog-Server",
+                details={},
+                opnsense_path="System > Settings > Logging > Remote"
+            ))
+        
+        # Check log retention
+        preserve_logs = logging_config.get("preserve_logs", 7)
+        if preserve_logs < 30:
+            findings.append(SystemSecurityFinding(
+                severity="LOW",
+                category="Logging",
+                check="short_log_retention",
+                issue=f"Log-Aufbewahrung nur {preserve_logs} Tage",
+                reason="Längere Aufbewahrung ermöglicht forensische Analyse",
+                solution="Erhöhe Log-Retention auf mindestens 30 Tage",
+                details={"current_days": preserve_logs},
+                opnsense_path="System > Settings > Logging"
+            ))
+        
+        # Check firewall logging
+        fw_log = logging_config.get("firewall", {})
+        if not fw_log.get("log_default_block", True):
+            findings.append(SystemSecurityFinding(
+                severity="MEDIUM",
+                category="Logging",
+                check="no_default_block_logging",
+                issue="Default-Block-Regel ohne Logging",
+                reason="Blockierte Verbindungen sollten geloggt werden",
+                solution="Aktiviere Logging für Default-Block",
+                details={},
+                opnsense_path="Firewall > Settings > Advanced"
+            ))
+        
+        return findings
+
+    def _analyze_cron_backup(self, cron_config: Dict) -> List[SystemSecurityFinding]:
+        """Analyze backup and cron configuration"""
+        findings = []
+        
+        # Check for config backup
+        backup = cron_config.get("backup", {})
+        if not backup.get("enabled", False):
+            findings.append(SystemSecurityFinding(
+                severity="HIGH",
+                category="Backup",
+                check="no_auto_backup",
+                issue="Kein automatisches Config-Backup konfiguriert",
+                reason="Ohne Backup kann Config-Verlust zum Problem werden",
+                solution="Konfiguriere automatisches Backup",
+                details={},
+                opnsense_path="System > Configuration > Backups"
+            ))
+        
+        # Check backup encryption
+        if backup.get("enabled", False) and not backup.get("encrypted", False):
+            findings.append(SystemSecurityFinding(
+                severity="MEDIUM",
+                category="Backup",
+                check="backup_not_encrypted",
+                issue="Config-Backup nicht verschlüsselt",
+                reason="Backup enthält sensible Daten wie Passwörter",
+                solution="Aktiviere Backup-Verschlüsselung",
+                details={},
+                opnsense_path="System > Configuration > Backups"
+            ))
+        
+        return findings
+
+    def _analyze_captive_portal(self, cp_config: Dict) -> List[SystemSecurityFinding]:
+        """Analyze Captive Portal configuration"""
+        findings = []
+        
+        if not cp_config or not cp_config.get("enabled", False):
+            return findings
+        
+        # Check HTTPS
+        if not cp_config.get("https", False):
+            findings.append(SystemSecurityFinding(
+                severity="HIGH",
+                category="Captive Portal",
+                check="cp_no_https",
+                issue="Captive Portal ohne HTTPS",
+                reason="Login-Daten werden unverschlüsselt übertragen",
+                solution="Aktiviere HTTPS für Captive Portal",
+                details={},
+                opnsense_path="Services > Captive Portal"
+            ))
+        
+        # Check session timeout
+        timeout = cp_config.get("timeout", 0)
+        if timeout == 0 or timeout > 480:
+            findings.append(SystemSecurityFinding(
+                severity="LOW",
+                category="Captive Portal",
+                check="cp_long_timeout",
+                issue="Captive Portal Session-Timeout zu lang oder unbegrenzt",
+                reason="Lange Sessions erhöhen Missbrauchsrisiko",
+                solution="Setze angemessenes Timeout (z.B. 4 Stunden)",
+                details={"timeout": timeout},
+                opnsense_path="Services > Captive Portal"
+            ))
+        
         return findings
 
     def get_optimal_system_config(self) -> Dict:

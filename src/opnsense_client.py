@@ -206,13 +206,69 @@ class OPNsenseClient:
             return []
 
     def get_dns_config(self) -> Dict:
-        """Get DNS/Unbound configuration"""
+        """Get DNS configuration including active servers"""
+        config = {
+            "unbound": {},
+            "dnsmasq": {},
+            "system_dns": [],
+            "dhcp_dns_servers": [],
+            "forward_servers": []
+        }
+        
+        # Unbound settings
         try:
             result = self._make_request("GET", "/unbound/settings/get")
-            return result
+            if result:
+                unbound = result.get("unbound", result)
+                config["unbound"] = unbound
+                
+                # Extract forwarding servers
+                fwd = unbound.get("dots", {})
+                if fwd:
+                    for key, server in fwd.items():
+                        if isinstance(server, dict) and server.get("enabled", "0") == "1":
+                            config["forward_servers"].append({
+                                "ip": server.get("server", ""),
+                                "port": server.get("port", "853"),
+                                "dot": True,
+                                "name": server.get("domain", "")
+                            })
         except Exception as e:
-            logger.error(f"Failed to get DNS config: {e}")
-            return {}
+            logger.debug(f"Failed to get Unbound config: {e}")
+        
+        # Dnsmasq settings
+        try:
+            result = self._make_request("GET", "/dnsmasq/settings/get")
+            if result:
+                config["dnsmasq"] = result.get("dnsmasq", result)
+        except Exception as e:
+            logger.debug(f"Dnsmasq not available: {e}")
+        
+        # System nameservers
+        try:
+            result = self._make_request("GET", "/core/system/generalSettings/get")
+            if result:
+                general = result.get("general", {})
+                dns1 = general.get("dns_server1", "")
+                dns2 = general.get("dns_server2", "")
+                dns3 = general.get("dns_server3", "")
+                config["system_dns"] = [d for d in [dns1, dns2, dns3] if d]
+        except Exception as e:
+            logger.debug(f"Failed to get system DNS: {e}")
+        
+        # DHCP server DNS settings (what clients get)
+        try:
+            result = self._make_request("GET", "/dhcpv4/settings/get")
+            if result:
+                for iface, settings in result.items():
+                    if isinstance(settings, dict):
+                        dns = settings.get("dns_servers", "")
+                        if dns:
+                            config["dhcp_dns_servers"].extend(dns.split(","))
+        except Exception as e:
+            logger.debug(f"Failed to get DHCP DNS: {e}")
+        
+        return config
 
     def get_alias_list(self) -> List[Dict]:
         """Get firewall aliases"""
@@ -259,45 +315,133 @@ class OPNsenseClient:
             "ids": {},
             "firmware": {},
             "general": {},
-            "auth": {}
+            "auth": {},
+            "vpn": {},
+            "logging": {},
+            "cron": {},
+            "captiveportal": {}
         }
 
-        # Get SSH configuration
+        # SSH
         try:
             result = self._make_request("GET", "/core/system/sshSettings/get")
             config["ssh"] = result.get("settings", {})
         except Exception as e:
-            logger.debug(f"Failed to get SSH config: {e}")
+            logger.debug(f"SSH config: {e}")
 
-        # Get Web GUI settings
+        # Web GUI
         try:
             result = self._make_request("GET", "/core/system/webguiSettings/get")
             config["webgui"] = result.get("webgui", {})
         except Exception as e:
-            logger.debug(f"Failed to get WebGUI config: {e}")
+            logger.debug(f"WebGUI config: {e}")
 
-        # Get IDS/IPS configuration
+        # IDS/IPS
         try:
             result = self._make_request("GET", "/ids/settings/get")
             config["ids"] = result.get("ids", {})
         except Exception as e:
-            logger.debug(f"Failed to get IDS config: {e}")
+            logger.debug(f"IDS config: {e}")
 
-        # Get firmware status
+        # Firmware
         try:
             result = self._make_request("GET", "/core/firmware/status")
             config["firmware"] = result
         except Exception as e:
-            logger.debug(f"Failed to get firmware status: {e}")
+            logger.debug(f"Firmware status: {e}")
 
-        # Get general settings
+        # General
         try:
             result = self._make_request("GET", "/core/system/generalSettings/get")
             config["general"] = result.get("general", {})
         except Exception as e:
-            logger.debug(f"Failed to get general settings: {e}")
+            logger.debug(f"General settings: {e}")
+
+        # VPN configs
+        config["vpn"] = self._get_vpn_security_config()
+
+        # Logging
+        try:
+            result = self._make_request("GET", "/syslog/settings/get")
+            config["logging"] = result.get("syslog", {})
+        except Exception as e:
+            logger.debug(f"Syslog config: {e}")
+
+        # Backup/Cron
+        try:
+            result = self._make_request("GET", "/cron/settings/get")
+            config["cron"] = result.get("cron", {})
+        except Exception as e:
+            logger.debug(f"Cron config: {e}")
+
+        # Captive Portal
+        try:
+            result = self._make_request("GET", "/captiveportal/settings/get")
+            config["captiveportal"] = result.get("captiveportal", {})
+        except Exception as e:
+            logger.debug(f"Captive Portal: {e}")
 
         return config
+
+    def _get_vpn_security_config(self) -> Dict:
+        """Get VPN security-relevant settings"""
+        vpn = {"openvpn": {"servers": []}, "ipsec": {}, "wireguard": {}}
+        
+        # OpenVPN servers
+        try:
+            result = self._make_request("GET", "/openvpn/export/providers")
+            if result:
+                for key, srv in result.items():
+                    if isinstance(srv, dict):
+                        vpn["openvpn"]["servers"].append({
+                            "name": srv.get("description", key),
+                            "cipher": srv.get("cipher", ""),
+                            "auth": srv.get("auth", ""),
+                            "tls_auth": srv.get("tls", "0"),
+                            "protocol": srv.get("protocol", "")
+                        })
+        except Exception as e:
+            logger.debug(f"OpenVPN export: {e}")
+        
+        # OpenVPN instances
+        try:
+            result = self._make_request("POST", "/openvpn/instances/search")
+            rows = result.get("rows", [])
+            for row in rows:
+                vpn["openvpn"]["servers"].append({
+                    "name": row.get("description", ""),
+                    "cipher": row.get("crypto", ""),
+                    "auth": row.get("auth", ""),
+                    "role": row.get("role", "")
+                })
+        except Exception as e:
+            logger.debug(f"OpenVPN instances: {e}")
+        
+        # IPsec
+        try:
+            result = self._make_request("GET", "/ipsec/tunnel/searchPhase1")
+            if result:
+                vpn["ipsec"]["enabled"] = "1"
+                vpn["ipsec"]["phase1"] = result.get("rows", [])
+        except Exception as e:
+            logger.debug(f"IPsec: {e}")
+        
+        # WireGuard
+        try:
+            result = self._make_request("GET", "/wireguard/general/get")
+            if result:
+                wg = result.get("general", {})
+                vpn["wireguard"]["enabled"] = wg.get("enabled", "0")
+        except Exception as e:
+            logger.debug(f"WireGuard: {e}")
+        
+        try:
+            result = self._make_request("POST", "/wireguard/client/searchClient")
+            vpn["wireguard"]["peers"] = result.get("rows", [])
+        except Exception as e:
+            logger.debug(f"WireGuard peers: {e}")
+        
+        return vpn
 
     def get_certificates(self) -> List[Dict]:
         """Get SSL/TLS certificates"""

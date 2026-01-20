@@ -3,10 +3,12 @@ DNS Configuration Analyzer
 Analyzes DNS/Unbound configuration for security issues
 """
 import logging
+import socket
+import subprocess
 import dns.resolver
 import dns.query
 import dns.message
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -14,13 +16,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DNSFinding:
-    """Represents a DNS security finding"""
     severity: str
     check: str
     issue: str
     reason: str
     solution: str
     details: Dict
+    opnsense_path: str = ""
 
 
 class DNSAnalyzer:
@@ -35,13 +37,174 @@ class DNSAnalyzer:
         """Analyze DNS configuration"""
         findings = []
 
-        # Analyze configuration settings
+        # Analyze Unbound/OPNsense settings
         findings.extend(self._analyze_dns_config(dns_config))
 
-        # Perform active DNS security tests
+        # Detect and test actual DNS servers in use
+        active_servers = self._detect_active_dns_servers(dns_config, dns_server)
+        findings.extend(self._analyze_active_dns_servers(active_servers))
+
+        # Test OPNsense DNS server
         findings.extend(self._test_dns_server(dns_server))
 
         return findings
+
+    def _detect_active_dns_servers(self, dns_config: Dict, opnsense_ip: str) -> List[Dict]:
+        """Detect which DNS servers are actually in use"""
+        servers = []
+        
+        # OPNsense Unbound
+        unbound = dns_config.get("unbound", {})
+        if unbound.get("enabled", "0") == "1":
+            servers.append({
+                "ip": opnsense_ip,
+                "type": "unbound",
+                "name": "OPNsense Unbound",
+                "forwarding": unbound.get("forwarding", "0") == "1"
+            })
+        
+        # Check forwarding servers
+        fwd_servers = unbound.get("forward_servers", [])
+        for fwd in fwd_servers:
+            if isinstance(fwd, str):
+                servers.append({"ip": fwd, "type": "forwarder", "name": f"Forwarder {fwd}"})
+            elif isinstance(fwd, dict):
+                servers.append({
+                    "ip": fwd.get("ip", ""),
+                    "type": "forwarder",
+                    "name": fwd.get("name", "Forwarder"),
+                    "dot": fwd.get("dot", False)
+                })
+        
+        # Check dnsmasq
+        dnsmasq = dns_config.get("dnsmasq", {})
+        if dnsmasq.get("enabled", "0") == "1":
+            servers.append({
+                "ip": opnsense_ip,
+                "type": "dnsmasq",
+                "name": "OPNsense Dnsmasq"
+            })
+        
+        # Check system DNS (resolv.conf)
+        system_dns = dns_config.get("system_dns", [])
+        for dns_ip in system_dns:
+            if dns_ip and dns_ip not in [s["ip"] for s in servers]:
+                servers.append({
+                    "ip": dns_ip,
+                    "type": "system",
+                    "name": f"System DNS {dns_ip}"
+                })
+        
+        # Check DHCP-assigned DNS for clients
+        dhcp_dns = dns_config.get("dhcp_dns_servers", [])
+        for dns_ip in dhcp_dns:
+            if dns_ip and dns_ip not in [s["ip"] for s in servers]:
+                servers.append({
+                    "ip": dns_ip,
+                    "type": "dhcp_assigned",
+                    "name": f"DHCP DNS {dns_ip}"
+                })
+        
+        return servers
+
+    def _analyze_active_dns_servers(self, servers: List[Dict]) -> List[DNSFinding]:
+        """Analyze active DNS servers for security issues"""
+        findings = []
+        
+        public_dns = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9", "208.67.222.222"]
+        isp_patterns = ["isp", "provider", "telekom", "vodafone", "comcast"]
+        
+        for srv in servers:
+            ip = srv.get("ip", "")
+            srv_type = srv.get("type", "")
+            
+            # Check public DNS without DoT
+            if ip in public_dns and not srv.get("dot", False):
+                findings.append(DNSFinding(
+                    severity="MEDIUM",
+                    check="public_dns_unencrypted",
+                    issue=f"Public DNS {ip} ohne Verschlüsselung",
+                    reason="DNS-Anfragen an öffentliche Server sind ohne DoT/DoH sichtbar",
+                    solution="Aktiviere DNS-over-TLS für externe DNS-Server",
+                    details={"server": ip, "encrypted": False},
+                    opnsense_path="Services > Unbound DNS > Query Forwarding"
+                ))
+            
+            # Test server response
+            if ip and srv_type != "unbound":
+                test_result = self._test_external_dns(ip)
+                if test_result.get("issues"):
+                    for issue in test_result["issues"]:
+                        findings.append(issue)
+        
+        # Check if no local DNS
+        local_dns = [s for s in servers if s.get("type") in ["unbound", "dnsmasq"]]
+        if not local_dns:
+            findings.append(DNSFinding(
+                severity="HIGH",
+                check="no_local_dns",
+                issue="Kein lokaler DNS-Resolver aktiv",
+                reason="Ohne lokalen Resolver gehen alle Anfragen direkt ins Internet",
+                solution="Aktiviere Unbound DNS als lokalen Resolver",
+                details={"active_servers": [s["ip"] for s in servers]},
+                opnsense_path="Services > Unbound DNS > General"
+            ))
+        
+        # Check forwarding mode without caching
+        for srv in servers:
+            if srv.get("type") == "unbound" and srv.get("forwarding"):
+                findings.append(DNSFinding(
+                    severity="LOW",
+                    check="dns_forwarding_mode",
+                    issue="Unbound im Forwarding-Modus",
+                    reason="Forwarding-Modus kann Caching und DNSSEC-Validierung beeinträchtigen",
+                    solution="Prüfe ob direkter Resolving-Modus möglich ist",
+                    details={"mode": "forwarding"},
+                    opnsense_path="Services > Unbound DNS > Query Forwarding"
+                ))
+        
+        return findings
+
+    def _test_external_dns(self, dns_ip: str) -> Dict:
+        """Test external DNS server for issues"""
+        result = {"issues": [], "latency": None}
+        
+        try:
+            resolver = dns.resolver.Resolver()
+            resolver.nameservers = [dns_ip]
+            resolver.timeout = 5
+            resolver.lifetime = 5
+            
+            import time
+            start = time.time()
+            resolver.resolve("google.com", "A")
+            latency = (time.time() - start) * 1000
+            result["latency"] = latency
+            
+            # High latency warning
+            if latency > 200:
+                result["issues"].append(DNSFinding(
+                    severity="LOW",
+                    check="dns_latency",
+                    issue=f"Hohe DNS-Latenz zu {dns_ip}: {latency:.0f}ms",
+                    reason="Hohe Latenz verlangsamt alle Netzwerkverbindungen",
+                    solution="Verwende geografisch nähere DNS-Server",
+                    details={"server": dns_ip, "latency_ms": latency},
+                    opnsense_path="Services > Unbound DNS > Query Forwarding"
+                ))
+                
+        except Exception as e:
+            result["issues"].append(DNSFinding(
+                severity="HIGH",
+                check="dns_unreachable",
+                issue=f"DNS-Server {dns_ip} nicht erreichbar",
+                reason=f"Server antwortet nicht: {str(e)[:50]}",
+                solution="Prüfe Netzwerkverbindung und DNS-Server-Status",
+                details={"server": dns_ip, "error": str(e)},
+                opnsense_path="Services > Unbound DNS > Query Forwarding"
+            ))
+        
+        return result
 
     def _analyze_dns_config(self, config: Dict) -> List[DNSFinding]:
         """Analyze DNS configuration from OPNsense"""
@@ -63,8 +226,9 @@ class DNSAnalyzer:
                     check="dnssec_enabled",
                     issue="DNSSEC ist nicht aktiviert",
                     reason="DNSSEC schützt vor DNS-Spoofing und Cache-Poisoning Attacken",
-                    solution="Aktiviere DNSSEC in Services > Unbound DNS > DNSSEC > Enable DNSSEC",
-                    details={"current": "disabled", "recommended": "enabled"}
+                    solution="Aktiviere DNSSEC in Services > Unbound DNS > DNSSEC",
+                    details={"current": "disabled", "recommended": "enabled"},
+                    opnsense_path="Services > Unbound DNS > General > DNSSEC"
                 ))
 
         # Check DNS Rebinding Protection
@@ -76,8 +240,9 @@ class DNSAnalyzer:
                     check="rebinding_protection",
                     issue="DNS Rebinding Protection nicht aktiv",
                     reason="Ohne Schutz können Angreifer DNS Rebinding Attacken durchführen",
-                    solution="Aktiviere 'Private Domain' Filter in Services > Unbound DNS > Advanced",
-                    details={"current": "disabled", "recommended": "enabled"}
+                    solution="Aktiviere 'Private Domain' Filter",
+                    details={"current": "disabled", "recommended": "enabled"},
+                    opnsense_path="Services > Unbound DNS > Advanced > Private Domains"
                 ))
 
         # Check DNS over TLS
@@ -89,8 +254,9 @@ class DNSAnalyzer:
                     check="dot_enabled",
                     issue="DNS over TLS (DoT) nicht konfiguriert",
                     reason="DNS-Anfragen werden unverschlüsselt übertragen",
-                    solution="Konfiguriere DNS over TLS Forwarding in Services > Unbound DNS > Query Forwarding",
-                    details={"current": "disabled", "recommended": "enabled"}
+                    solution="Konfiguriere DNS over TLS Forwarding",
+                    details={"current": "disabled", "recommended": "enabled"},
+                    opnsense_path="Services > Unbound DNS > Query Forwarding"
                 ))
 
         # Check if DNS is listening on all interfaces
@@ -102,7 +268,8 @@ class DNSAnalyzer:
                 issue="DNS Server hört auf allen Interfaces",
                 reason="DNS sollte nur auf internen Interfaces lauschen",
                 solution="Beschränke DNS auf spezifische interne Interfaces",
-                details={"current_interfaces": interfaces}
+                details={"current_interfaces": interfaces},
+                opnsense_path="Services > Unbound DNS > General > Network Interfaces"
             ))
 
         # Check Access Lists
@@ -113,8 +280,35 @@ class DNSAnalyzer:
                 check="dns_acl",
                 issue="Keine DNS Access Control Lists konfiguriert",
                 reason="Ohne ACLs könnte DNS Server von außen abgefragt werden",
-                solution="Konfiguriere ACLs in Services > Unbound DNS > Access Lists",
-                details={"current": "no ACLs"}
+                solution="Konfiguriere ACLs für interne Netzwerke",
+                details={"current": "no ACLs"},
+                opnsense_path="Services > Unbound DNS > Access Lists"
+            ))
+        
+        # Check cache size
+        cache_size = unbound.get("cache_size", "")
+        if not cache_size or int(cache_size or 0) < 50:
+            findings.append(DNSFinding(
+                severity="LOW",
+                check="dns_cache_size",
+                issue="DNS Cache zu klein oder nicht konfiguriert",
+                reason="Größerer Cache verbessert Performance und reduziert externe Anfragen",
+                solution="Erhöhe Cache-Größe auf mindestens 50MB",
+                details={"current": cache_size or "default"},
+                opnsense_path="Services > Unbound DNS > Advanced > Cache Size"
+            ))
+        
+        # Check prefetch
+        prefetch = unbound.get("prefetch", "0") == "1"
+        if not prefetch:
+            findings.append(DNSFinding(
+                severity="LOW",
+                check="dns_prefetch",
+                issue="DNS Prefetching nicht aktiviert",
+                reason="Prefetching hält populäre Einträge im Cache aktuell",
+                solution="Aktiviere Prefetch für bessere Performance",
+                details={"current": "disabled"},
+                opnsense_path="Services > Unbound DNS > Advanced > Prefetch Support"
             ))
 
         return findings
