@@ -1,6 +1,6 @@
 """
 Report Generator
-Generates comprehensive security audit reports in multiple formats
+Outputs security audit data as HTML, JSON or plaintext
 """
 import json
 import logging

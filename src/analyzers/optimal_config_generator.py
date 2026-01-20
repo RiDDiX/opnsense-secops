@@ -1,6 +1,6 @@
 """
 Optimal Configuration Generator
-Generates comprehensive security configuration recommendations for OPNsense
+Security hardening recommendations for OPNsense
 """
 import logging
 from typing import Dict, List
@@ -29,7 +29,7 @@ class OptimalConfigGenerator:
         self.recommendations = []
 
     def generate_recommendations(self, audit_results: Dict) -> Dict:
-        """Generate comprehensive configuration recommendations based on audit results"""
+        """Build config recommendations from audit data"""
         
         recommendations = {
             "security_score": 0,

@@ -252,7 +252,7 @@ class OPNsenseClient:
             return False
 
     def get_system_config(self) -> Dict:
-        """Get comprehensive system security configuration"""
+        """Fetch system security settings"""
         config = {
             "ssh": {},
             "webgui": {},

@@ -1,6 +1,6 @@
 """
-OPNsense Security Auditor - Main Application
-Comprehensive security audit tool for OPNsense firewalls
+OPNsense Security Auditor
+Main entry point for firewall security scans
 """
 import os
 import sys
