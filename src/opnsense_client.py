@@ -1,10 +1,10 @@
 """
 OPNsense API Client
-Handles all communication with OPNsense API
+Handles communication with OPNsense 25.x API
 """
 import requests
 import urllib3
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 import logging
 
 # Disable SSL warnings for self-signed certificates
@@ -53,47 +53,100 @@ class OPNsenseClient:
             raise
 
     def get_firewall_rules(self) -> List[Dict]:
-        """Get all firewall rules from automation API"""
+        """Get firewall filter rules via /api/firewall/filter/searchRule"""
         try:
-            # Use POST for search endpoints per OPNsense API docs
-            result = self._make_request("POST", "/firewall/filter/search_rule")
-            return result.get("rows", [])
+            result = self._make_request("POST", "/firewall/filter/searchRule")
+            rows = result.get("rows", [])
+            logger.info(f"Retrieved {len(rows)} firewall rules")
+            return self._normalize_firewall_rules(rows)
         except Exception as e:
             logger.error(f"Failed to get firewall rules: {e}")
             return []
 
+    def _normalize_firewall_rules(self, rules: List[Dict]) -> List[Dict]:
+        """Normalize firewall rule fields for consistent analysis"""
+        normalized = []
+        for rule in rules:
+            norm = {
+                "uuid": rule.get("uuid", ""),
+                "enabled": rule.get("enabled", "0"),
+                "sequence": rule.get("sequence", 0),
+                "description": rule.get("description", ""),
+                "interface": rule.get("interface", ""),
+                "direction": rule.get("direction", "in"),
+                "ipprotocol": rule.get("ipprotocol", "inet"),
+                "protocol": rule.get("protocol", "any"),
+                "source_net": rule.get("source_net", "any"),
+                "source_port": rule.get("source_port", ""),
+                "destination_net": rule.get("destination_net", "any"),
+                "destination_port": rule.get("destination_port", ""),
+                "action": rule.get("action", "pass"),
+                "log": rule.get("log", "0"),
+                "quick": rule.get("quick", "1"),
+                "_raw": rule
+            }
+            normalized.append(norm)
+        return normalized
+
     def get_nat_rules(self) -> List[Dict]:
-        """Get NAT rules (Source NAT / Outbound)"""
+        """Get all NAT rules (Port Forward, Source NAT, 1:1, NPT)"""
         nat_rules = []
         
-        # Get Source NAT rules
+        # Port Forward rules (most common)
         try:
-            result = self._make_request("POST", "/firewall/source_nat/search_rule")
+            result = self._make_request("POST", "/firewall/nat/search_rule", silent=True)
+            for rule in result.get("rows", []):
+                rule["nat_type"] = "port_forward"
+                nat_rules.append(self._normalize_nat_rule(rule))
+        except Exception:
+            pass
+        
+        # Source NAT / Outbound
+        try:
+            result = self._make_request("POST", "/firewall/source_nat/searchRule")
             for rule in result.get("rows", []):
                 rule["nat_type"] = "source_nat"
-                nat_rules.append(rule)
+                nat_rules.append(self._normalize_nat_rule(rule))
         except Exception as e:
-            logger.debug(f"Failed to get Source NAT rules: {e}")
+            logger.debug(f"Source NAT: {e}")
         
-        # Get 1:1 NAT rules
+        # 1:1 NAT
         try:
-            result = self._make_request("POST", "/firewall/one_to_one/search_rule")
+            result = self._make_request("POST", "/firewall/one_to_one/searchRule")
             for rule in result.get("rows", []):
                 rule["nat_type"] = "one_to_one"
-                nat_rules.append(rule)
+                nat_rules.append(self._normalize_nat_rule(rule))
         except Exception as e:
-            logger.debug(f"Failed to get 1:1 NAT rules: {e}")
+            logger.debug(f"1:1 NAT: {e}")
         
-        # Get NPT (IPv6 Network Prefix Translation) rules
+        # NPT (IPv6)
         try:
-            result = self._make_request("POST", "/firewall/npt/search_rule")
+            result = self._make_request("POST", "/firewall/npt/searchRule")
             for rule in result.get("rows", []):
                 rule["nat_type"] = "npt"
-                nat_rules.append(rule)
+                nat_rules.append(self._normalize_nat_rule(rule))
         except Exception as e:
-            logger.debug(f"Failed to get NPT rules: {e}")
+            logger.debug(f"NPT: {e}")
         
+        logger.info(f"Retrieved {len(nat_rules)} NAT rules")
         return nat_rules
+
+    def _normalize_nat_rule(self, rule: Dict) -> Dict:
+        """Normalize NAT rule fields"""
+        return {
+            "uuid": rule.get("uuid", ""),
+            "enabled": rule.get("enabled", "0"),
+            "description": rule.get("description", ""),
+            "interface": rule.get("interface", ""),
+            "source": rule.get("source_net", rule.get("source", "any")),
+            "destination": rule.get("destination_net", rule.get("destination", "")),
+            "destination_port": rule.get("destination_port", rule.get("local-port", "")),
+            "target": rule.get("target", rule.get("redirect_target", "")),
+            "target_port": rule.get("target_port", rule.get("local-port", "")),
+            "protocol": rule.get("protocol", "any"),
+            "nat_type": rule.get("nat_type", "unknown"),
+            "_raw": rule
+        }
 
     def get_interfaces(self) -> Dict:
         """Get all network interfaces from multiple sources"""
@@ -206,7 +259,7 @@ class OPNsenseClient:
             return []
 
     def get_dns_config(self) -> Dict:
-        """Get DNS configuration including active servers"""
+        """Get DNS configuration via OPNsense 25.x API"""
         config = {
             "unbound": {},
             "dnsmasq": {},
@@ -215,60 +268,108 @@ class OPNsenseClient:
             "forward_servers": []
         }
         
-        # Unbound settings
+        # Unbound general settings via /api/unbound/settings/get
         try:
             result = self._make_request("GET", "/unbound/settings/get")
             if result:
-                unbound = result.get("unbound", result)
-                config["unbound"] = unbound
-                
-                # Extract forwarding servers
-                fwd = unbound.get("dots", {})
-                if fwd:
-                    for key, server in fwd.items():
-                        if isinstance(server, dict) and server.get("enabled", "0") == "1":
-                            config["forward_servers"].append({
-                                "ip": server.get("server", ""),
-                                "port": server.get("port", "853"),
-                                "dot": True,
-                                "name": server.get("domain", "")
-                            })
+                unbound = result.get("unbound", {})
+                if not unbound and isinstance(result, dict):
+                    unbound = result
+                config["unbound"] = self._normalize_unbound_config(unbound)
+                logger.info(f"Unbound config retrieved, enabled={config['unbound'].get('enabled', 'unknown')}")
         except Exception as e:
-            logger.debug(f"Failed to get Unbound config: {e}")
+            logger.debug(f"Unbound settings: {e}")
         
-        # Dnsmasq settings
+        # Unbound forwarding servers via /api/unbound/settings/searchForward
+        try:
+            result = self._make_request("POST", "/unbound/settings/searchForward")
+            if result and result.get("rows"):
+                for fwd in result["rows"]:
+                    if fwd.get("enabled", "0") == "1":
+                        config["forward_servers"].append({
+                            "ip": fwd.get("server", fwd.get("ip", "")),
+                            "port": fwd.get("port", "53"),
+                            "dot": fwd.get("forward_type", "") == "dot",
+                            "domain": fwd.get("domain", ""),
+                            "enabled": True
+                        })
+                logger.info(f"Found {len(config['forward_servers'])} DNS forwarders")
+        except Exception as e:
+            logger.debug(f"Unbound forwards: {e}")
+        
+        # Dnsmasq via /api/dnsmasq/settings/get
         try:
             result = self._make_request("GET", "/dnsmasq/settings/get")
             if result:
-                config["dnsmasq"] = result.get("dnsmasq", result)
+                dnsmasq = result.get("dnsmasq", result)
+                config["dnsmasq"] = {
+                    "enabled": dnsmasq.get("enabled", "0"),
+                    "port": dnsmasq.get("port", "53")
+                }
         except Exception as e:
-            logger.debug(f"Dnsmasq not available: {e}")
+            logger.debug(f"Dnsmasq: {e}")
         
-        # System nameservers
+        # System DNS servers via /api/core/system/generalSettings/get
         try:
             result = self._make_request("GET", "/core/system/generalSettings/get")
             if result:
                 general = result.get("general", {})
-                dns1 = general.get("dns_server1", "")
-                dns2 = general.get("dns_server2", "")
-                dns3 = general.get("dns_server3", "")
-                config["system_dns"] = [d for d in [dns1, dns2, dns3] if d]
+                for i in range(1, 5):
+                    dns = general.get(f"dns_server{i}", general.get(f"dnsserver{i}", ""))
+                    if dns and dns.strip():
+                        config["system_dns"].append(dns.strip())
         except Exception as e:
-            logger.debug(f"Failed to get system DNS: {e}")
+            logger.debug(f"System DNS: {e}")
         
-        # DHCP server DNS settings (what clients get)
+        # DHCPv4 DNS settings via /api/dhcpv4/settings/get
         try:
             result = self._make_request("GET", "/dhcpv4/settings/get")
             if result:
-                for iface, settings in result.items():
-                    if isinstance(settings, dict):
-                        dns = settings.get("dns_servers", "")
-                        if dns:
-                            config["dhcp_dns_servers"].extend(dns.split(","))
+                dhcp = result.get("dhcpv4", result)
+                if isinstance(dhcp, dict):
+                    for key, iface in dhcp.items():
+                        if isinstance(iface, dict):
+                            dns = iface.get("dns_servers", iface.get("dnsserver", ""))
+                            if dns:
+                                for d in str(dns).split(","):
+                                    if d.strip() and d.strip() not in config["dhcp_dns_servers"]:
+                                        config["dhcp_dns_servers"].append(d.strip())
         except Exception as e:
-            logger.debug(f"Failed to get DHCP DNS: {e}")
+            logger.debug(f"DHCP DNS: {e}")
+        
+        # Kea DHCPv4 DNS (newer OPNsense)
+        try:
+            result = self._make_request("GET", "/kea/dhcpv4/get")
+            if result:
+                kea = result.get("dhcpv4", result)
+                if isinstance(kea, dict):
+                    for key, subnet in kea.get("subnets", {}).items():
+                        if isinstance(subnet, dict):
+                            dns = subnet.get("option_data_dns_servers", "")
+                            if dns:
+                                for d in str(dns).split(","):
+                                    if d.strip() and d.strip() not in config["dhcp_dns_servers"]:
+                                        config["dhcp_dns_servers"].append(d.strip())
+        except Exception as e:
+            logger.debug(f"Kea DHCP: {e}")
         
         return config
+
+    def _normalize_unbound_config(self, unbound: Dict) -> Dict:
+        """Normalize Unbound config fields"""
+        return {
+            "enabled": unbound.get("enabled", unbound.get("enable", "0")),
+            "dnssec": unbound.get("dnssec", "0"),
+            "forwarding": unbound.get("forwarding", unbound.get("forward_mode", "0")),
+            "port": unbound.get("port", "53"),
+            "interfaces": unbound.get("active_interface", unbound.get("interfaces", [])),
+            "private_domain": unbound.get("private_domain", unbound.get("rebind_protection", "0")),
+            "cache_size": unbound.get("msgcachesize", unbound.get("cache_size", "")),
+            "prefetch": unbound.get("prefetch", "0"),
+            "dot": unbound.get("dot", unbound.get("dns_over_tls", "0")),
+            "acls": unbound.get("acls", {}),
+            "_raw": unbound
+        }
 
     def get_alias_list(self) -> List[Dict]:
         """Get firewall aliases"""
@@ -308,7 +409,7 @@ class OPNsenseClient:
             return False
 
     def get_system_config(self) -> Dict:
-        """Fetch system security settings"""
+        """Fetch system security settings via OPNsense 25.x API"""
         config = {
             "ssh": {},
             "webgui": {},
@@ -322,62 +423,145 @@ class OPNsenseClient:
             "captiveportal": {}
         }
 
-        # SSH
+        # SSH via /api/core/system/sshSettings/get
         try:
             result = self._make_request("GET", "/core/system/sshSettings/get")
-            config["ssh"] = result.get("settings", {})
+            ssh = result.get("settings", result.get("ssh", {}))
+            config["ssh"] = {
+                "enabled": ssh.get("enabled", ssh.get("enable", "0")),
+                "permitrootlogin": ssh.get("permitrootlogin", ssh.get("root_login", "0")),
+                "passwordauth": ssh.get("passwordauth", ssh.get("password_auth", "0")),
+                "port": ssh.get("port", "22"),
+                "interfaces": ssh.get("interfaces", ssh.get("listen_interfaces", [])),
+                "_raw": ssh
+            }
+            logger.info(f"SSH config: enabled={config['ssh']['enabled']}")
         except Exception as e:
             logger.debug(f"SSH config: {e}")
 
-        # Web GUI
+        # Web GUI via /api/core/system/webguiSettings/get
         try:
             result = self._make_request("GET", "/core/system/webguiSettings/get")
-            config["webgui"] = result.get("webgui", {})
+            webgui = result.get("webgui", result.get("settings", {}))
+            config["webgui"] = {
+                "protocol": webgui.get("protocol", "https"),
+                "port": webgui.get("port", webgui.get("webguiport", "443")),
+                "httpsredirect": webgui.get("httpsredirect", webgui.get("ssl_redirect", "0")),
+                "hsts": webgui.get("hsts", webgui.get("stricttransportsecurity", "0")),
+                "session_timeout": webgui.get("session_timeout", webgui.get("authserver_timeout", "240")),
+                "interfaces": webgui.get("interfaces", webgui.get("listen_interfaces", [])),
+                "_raw": webgui
+            }
         except Exception as e:
             logger.debug(f"WebGUI config: {e}")
 
-        # IDS/IPS
+        # IDS/IPS via /api/ids/settings/get
         try:
             result = self._make_request("GET", "/ids/settings/get")
-            config["ids"] = result.get("ids", {})
+            ids = result.get("ids", result.get("settings", {}))
+            config["ids"] = {
+                "enabled": ids.get("enabled", ids.get("enable", "0")),
+                "ips_mode": ids.get("ips", ids.get("ips_mode", "0")),
+                "auto_update": ids.get("UpdateCron", ids.get("auto_update", "0")),
+                "rulesets": ids.get("rulesets", {}),
+                "_raw": ids
+            }
         except Exception as e:
             logger.debug(f"IDS config: {e}")
 
-        # Firmware
+        # Firmware via /api/core/firmware/status
         try:
             result = self._make_request("GET", "/core/firmware/status")
-            config["firmware"] = result
+            config["firmware"] = {
+                "updates_available": result.get("status", "") == "update",
+                "current_version": result.get("product_version", ""),
+                "last_update": result.get("last_check", ""),
+                "_raw": result
+            }
         except Exception as e:
             logger.debug(f"Firmware status: {e}")
 
-        # General
+        # General via /api/core/system/generalSettings/get
         try:
             result = self._make_request("GET", "/core/system/generalSettings/get")
-            config["general"] = result.get("general", {})
+            general = result.get("general", result.get("settings", {}))
+            config["general"] = {
+                "hostname": general.get("hostname", ""),
+                "domain": general.get("domain", ""),
+                "ntp_servers": [
+                    general.get("timeservers", general.get("ntpserver", ""))
+                ],
+                "console_menu": general.get("disableconsolemenu", "0") != "1",
+                "_raw": general
+            }
         except Exception as e:
             logger.debug(f"General settings: {e}")
 
-        # VPN configs
+        # Auth settings
+        try:
+            result = self._make_request("GET", "/auth/settings/get")
+            auth = result.get("settings", result.get("auth", {}))
+            config["auth"] = {
+                "totp_enabled": auth.get("totp", auth.get("totp_enabled", "0")),
+                "lockout_threshold": int(auth.get("lockout_attempts", auth.get("lockout_threshold", 0)) or 0),
+                "_raw": auth
+            }
+        except Exception as e:
+            logger.debug(f"Auth settings: {e}")
+
+        # VPN
         config["vpn"] = self._get_vpn_security_config()
 
-        # Logging
+        # Syslog via /api/syslog/settings/get
         try:
             result = self._make_request("GET", "/syslog/settings/get")
-            config["logging"] = result.get("syslog", {})
+            syslog = result.get("syslog", result.get("settings", {}))
+            destinations = syslog.get("destinations", {})
+            has_remote = any(
+                isinstance(d, dict) and d.get("enabled", "0") == "1" 
+                for d in destinations.values()
+            ) if isinstance(destinations, dict) else False
+            config["logging"] = {
+                "remote_syslog": {"enabled": has_remote},
+                "preserve_logs": int(syslog.get("preservelogs", 31) or 31),
+                "firewall": {"log_default_block": syslog.get("logdefaultblock", "1") == "1"},
+                "_raw": syslog
+            }
         except Exception as e:
             logger.debug(f"Syslog config: {e}")
 
-        # Backup/Cron
+        # Cron/Backup via /api/cron/settings/get
         try:
             result = self._make_request("GET", "/cron/settings/get")
-            config["cron"] = result.get("cron", {})
+            cron = result.get("cron", result.get("settings", {}))
+            jobs = cron.get("jobs", {})
+            has_backup = any(
+                isinstance(j, dict) and "backup" in str(j.get("command", "")).lower()
+                for j in jobs.values()
+            ) if isinstance(jobs, dict) else False
+            config["cron"] = {
+                "backup": {"enabled": has_backup, "encrypted": False},
+                "_raw": cron
+            }
         except Exception as e:
             logger.debug(f"Cron config: {e}")
 
-        # Captive Portal
+        # Captive Portal via /api/captiveportal/settings/get
         try:
             result = self._make_request("GET", "/captiveportal/settings/get")
-            config["captiveportal"] = result.get("captiveportal", {})
+            cp = result.get("captiveportal", result.get("settings", {}))
+            zones = cp.get("zones", {})
+            active_zones = [z for z in zones.values() if isinstance(z, dict) and z.get("enabled", "0") == "1"]
+            if active_zones:
+                zone = active_zones[0]
+                config["captiveportal"] = {
+                    "enabled": True,
+                    "https": zone.get("certificate", "") != "",
+                    "timeout": int(zone.get("idletimeout", 0) or 0),
+                    "_raw": cp
+                }
+            else:
+                config["captiveportal"] = {"enabled": False}
         except Exception as e:
             logger.debug(f"Captive Portal: {e}")
 

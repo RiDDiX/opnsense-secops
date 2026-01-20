@@ -157,8 +157,9 @@ class FirewallAnalyzer:
                 continue
 
             rule_uuid = rule.get("uuid", "unknown")
-            target_ip = rule.get("target", rule.get("redirect_target", ""))
-            dst_port = rule.get("destination_port", rule.get("local-port", ""))
+            # Support both normalized and raw field names from OPNsense 25.x API
+            target_ip = rule.get("target", rule.get("redirect_target", rule.get("target_ip", "")))
+            dst_port = rule.get("destination_port", rule.get("target_port", rule.get("local-port", "")))
             
             # Check for port forwards to critical services
             if self._is_critical_port_forward(dst_port):
@@ -269,7 +270,8 @@ class FirewallAnalyzer:
 
     def _has_unrestricted_source(self, rule: Dict) -> bool:
         """Check if NAT rule has unrestricted source"""
-        src = rule.get("source_net", "").lower()
+        # Check both normalized and raw field names
+        src = rule.get("source", rule.get("source_net", "")).lower()
         return src in ["any", "", "0.0.0.0/0", "::/0"]
 
     def _analyze_security_policies(self, rules: List[Dict]) -> List[FirewallFinding]:
