@@ -365,7 +365,9 @@ class SecurityAuditor:
 
         # Generate network map
         results["network_map"] = self.network_discovery.generate_network_map(devices)
-        results["statistics"] = self.network_discovery.get_device_statistics(devices)
+        # Merge device statistics with existing statistics
+        device_stats = self.network_discovery.get_device_statistics(devices)
+        results["statistics"].update(device_stats)
 
         if self._is_cancelled():
             return results
