@@ -1317,24 +1317,74 @@ def start_internal_scan():
                 except:
                     return False
             
+            # Helper: extract MAC from various field name formats
+            def extract_mac(entry):
+                for key in ('mac', 'hwaddr', 'hw_address', 'hw-address', 'hwaddress',
+                            'mac_address', 'mac-address', 'Mac', 'MAC'):
+                    val = entry.get(key, '')
+                    if val and val not in ('', '--', '(incomplete)', 'incomplete'):
+                        return val
+                return ''
+            
+            # Helper: extract hostname from various field name formats
+            def extract_hostname(entry):
+                for key in ('hostname', 'name', 'client-hostname', 'client_hostname',
+                            'client_name', 'Hostname', 'host'):
+                    val = entry.get(key, '')
+                    if val and val not in ('', '--', 'Unknown', '?', '*'):
+                        return val
+                return ''
+            
+            # Helper: extract IP from various field name formats
+            def extract_ip(entry):
+                for key in ('address', 'ip', 'ip-address', 'ip_address', 'ipaddr', 'IP'):
+                    val = entry.get(key, '')
+                    if val:
+                        return val
+                return ''
+            
+            # Debug: Log first entry of each data source to see field format
+            if dhcp_leases:
+                sample = dhcp_leases[0]
+                internal_scan_log('info', f'📋 DHCP fields: {list(sample.keys())[:10]}')
+            if arp_table:
+                sample = arp_table[0]
+                internal_scan_log('info', f'📋 ARP fields: {list(sample.keys())[:10]}')
+            
             # Collect all known hosts from DHCP and ARP
             known_hosts = {}
             for lease in dhcp_leases:
-                ip = lease.get('address', lease.get('ip', ''))
+                ip = extract_ip(lease)
                 if ip and is_private_ip(ip):
+                    mac = extract_mac(lease)
+                    hostname = extract_hostname(lease)
                     known_hosts[ip] = {
-                        'mac': lease.get('mac', ''),
-                        'hostname': lease.get('hostname', ''),
-                        'status': 'active' if lease.get('state') == 'active' else 'inactive'
+                        'mac': mac,
+                        'hostname': hostname,
+                        'status': 'active' if lease.get('state', lease.get('binding_state', '')) in ('active', 'Active') else 'inactive'
                     }
             
+            dhcp_matched = sum(1 for v in known_hosts.values() if v.get('hostname'))
+            internal_scan_log('info', f'📋 DHCP: {len(known_hosts)} IPs, {dhcp_matched} with hostname')
+            
             for arp in arp_table:
-                ip = arp.get('ip', '')
+                ip = arp.get('ip', arp.get('ip-address', arp.get('address', '')))
                 if ip and is_private_ip(ip):
+                    mac = extract_mac(arp)
                     if ip not in known_hosts:
-                        known_hosts[ip] = {}
-                    known_hosts[ip]['mac'] = arp.get('mac', known_hosts.get(ip, {}).get('mac', ''))
+                        known_hosts[ip] = {'hostname': '', 'status': 'active'}
+                    if mac:
+                        known_hosts[ip]['mac'] = mac
+                    elif not known_hosts[ip].get('mac'):
+                        known_hosts[ip]['mac'] = ''
+                    # ARP hostname (some OPNsense versions include it)
+                    arp_hostname = extract_hostname(arp)
+                    if arp_hostname and not known_hosts[ip].get('hostname'):
+                        known_hosts[ip]['hostname'] = arp_hostname
                     known_hosts[ip]['status'] = 'active'
+            
+            arp_macs = sum(1 for v in known_hosts.values() if v.get('mac'))
+            internal_scan_log('info', f'📋 After ARP merge: {len(known_hosts)} IPs, {arp_macs} with MAC')
             
             # Use nmap to discover live hosts and scan ALL ports
             nm = nmap.PortScanner()
@@ -1472,11 +1522,46 @@ def start_internal_scan():
                             dh['open_ports'] = len(device['open_ports'])
                             break
             
+            # Phase 3: Batch Reverse DNS for remaining unknowns
+            import socket
+            unknown_hosts = [d for d in devices if not d.get('hostname')]
+            if unknown_hosts:
+                internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+                internal_scan_log('info', f'🔤 PHASE 3: Hostname Resolution ({len(unknown_hosts)} devices)')
+                internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+                internal_scan_state['current_step'] = f'Resolving hostnames for {len(unknown_hosts)} devices...'
+                
+                resolved_count = 0
+                old_timeout = socket.getdefaulttimeout()
+                socket.setdefaulttimeout(1.5)
+                try:
+                    for d in unknown_hosts:
+                        try:
+                            hostname, _, _ = socket.gethostbyaddr(d['ip'])
+                            if hostname and hostname != d['ip']:
+                                d['hostname'] = hostname
+                                resolved_count += 1
+                                internal_scan_log('success', f'   ✅ {d["ip"]} → {hostname}')
+                        except (socket.herror, socket.gaierror, socket.timeout, OSError):
+                            pass
+                finally:
+                    socket.setdefaulttimeout(old_timeout)
+                
+                internal_scan_log('info', f'📋 Resolved {resolved_count}/{len(unknown_hosts)} hostnames via reverse DNS')
+                
+                # Update devices in state
+                with internal_scan_lock:
+                    internal_scan_state['devices'] = devices.copy()
+            
             # Scan complete
             internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
             internal_scan_log('success', f'🎉 Scan completed! Found {len(devices)} devices')
             total_ports = sum(len(d['open_ports']) for d in devices)
-            internal_scan_log('info', f'📊 Total open ports found: {total_ports}')
+            hostnames_known = sum(1 for d in devices if d.get('hostname'))
+            macs_known = sum(1 for d in devices if d.get('mac') and d['mac'] not in ('', '--'))
+            internal_scan_log('info', f'📊 Total open ports: {total_ports}')
+            internal_scan_log('info', f'📊 Hostnames resolved: {hostnames_known}/{len(devices)}')
+            internal_scan_log('info', f'📊 MAC addresses known: {macs_known}/{len(devices)}')
             internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
             
             internal_scan_state['current_step'] = 'Scan completed'

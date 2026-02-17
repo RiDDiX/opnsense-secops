@@ -37,6 +37,15 @@ class NetworkDiscovery:
         self.nm = nmap.PortScanner()
 
     @staticmethod
+    def _extract_field(entry: Dict, keys: tuple) -> str:
+        """Extract a value from a dict trying multiple possible field names"""
+        for key in keys:
+            val = entry.get(key, '')
+            if val and str(val) not in ('', '--', '(incomplete)', 'incomplete', 'Unknown', '?', '*'):
+                return str(val)
+        return ''
+
+    @staticmethod
     def _is_private_ip(ip_str: str) -> bool:
         """Check if an IP address is private (RFC1918/RFC4193)"""
         try:
@@ -69,26 +78,34 @@ class NetworkDiscovery:
 
         # Add data from DHCP leases (only private IPs)
         for lease in dhcp_leases:
-            ip = lease.get("address", lease.get("ip", ""))
+            ip = self._extract_field(lease, ("address", "ip", "ip-address", "ip_address", "ipaddr"))
             if ip and self._is_private_ip(ip):
+                mac = self._extract_field(lease, ("mac", "hwaddr", "hw_address", "hw-address", "hwaddress", "mac_address"))
+                hostname = self._extract_field(lease, ("hostname", "name", "client-hostname", "client_hostname", "client_name"))
                 device_map[ip].update({
                     "ip": ip,
-                    "mac": lease.get("mac", ""),
-                    "hostname": lease.get("hostname", ""),
-                    "status": "active" if lease.get("state") == "active" else "inactive"
+                    "mac": mac,
+                    "hostname": hostname,
+                    "status": "active" if lease.get("state", lease.get("binding_state", "")) in ("active", "Active") else "inactive"
                 })
 
         # Add data from ARP table (only private IPs)
         for arp_entry in arp_table:
-            ip = arp_entry.get("ip", "")
+            ip = self._extract_field(arp_entry, ("ip", "ip-address", "address", "ip_address"))
             if ip and self._is_private_ip(ip):
+                mac = self._extract_field(arp_entry, ("mac", "hwaddr", "hw_address", "hw-address", "mac_address"))
                 if ip not in device_map:
                     device_map[ip] = {"ip": ip}
-                device_map[ip].update({
-                    "mac": arp_entry.get("mac", device_map[ip].get("mac", "")),
-                    "vendor": self._lookup_vendor(arp_entry.get("mac", "")),
-                    "status": "active"
-                })
+                if mac:
+                    device_map[ip]["mac"] = mac
+                elif not device_map[ip].get("mac"):
+                    device_map[ip]["mac"] = ""
+                device_map[ip]["vendor"] = self._lookup_vendor(mac or "")
+                device_map[ip]["status"] = "active"
+                # ARP hostname (some OPNsense versions include it)
+                arp_hostname = self._extract_field(arp_entry, ("hostname", "name", "host"))
+                if arp_hostname and not device_map[ip].get("hostname"):
+                    device_map[ip]["hostname"] = arp_hostname
 
         # Perform active network discovery
         for network in networks:
