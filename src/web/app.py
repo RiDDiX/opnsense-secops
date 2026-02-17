@@ -1263,34 +1263,45 @@ def get_latest_results():
 
 
 def calculate_category_scores(results):
-    """Calculate security scores per category"""
-    scores = {
-        'firewall': 100,
-        'dns': 100,
-        'system': 100,
-        'vpn': 100
-    }
+    """Calculate security scores per category using weighted penalty system.
     
-    # Deduct points based on findings
-    severity_weights = {'critical': 25, 'high': 15, 'medium': 8, 'low': 3}
+    Uses diminishing deductions so that many low-severity findings
+    don't immediately drop a category to 0%. Each finding's impact
+    decreases as more findings accumulate in the same category.
+    """
+    severity_weights = {'critical': 20, 'high': 12, 'medium': 5, 'low': 2}
     
-    for finding in results.get('firewall_findings', []):
-        sev = (finding.get('severity', '') or '').lower()
-        scores['firewall'] = max(0, scores['firewall'] - severity_weights.get(sev, 0))
+    def calc_score(findings):
+        if not findings:
+            return 100
+        total_penalty = 0
+        for i, f in enumerate(findings):
+            sev = (f.get('severity', '') or '').lower()
+            weight = severity_weights.get(sev, 0)
+            # Diminishing returns: each additional finding has less impact
+            diminish = 1.0 / (1 + i * 0.3)
+            total_penalty += weight * diminish
+        return max(0, round(100 - total_penalty))
     
-    for finding in results.get('dns_findings', []):
-        sev = (finding.get('severity', '') or '').lower()
-        scores['dns'] = max(0, scores['dns'] - severity_weights.get(sev, 0))
+    # Split findings into categories
+    fw_findings = results.get('firewall_findings', [])
+    dns_findings = results.get('dns_findings', [])
+    sys_findings = []
+    vpn_findings = []
     
-    for finding in results.get('system_findings', []):
-        sev = (finding.get('severity', '') or '').lower()
-        cat = (finding.get('category', '') or '').lower()
+    for f in results.get('system_findings', []):
+        cat = (f.get('category', '') or '').lower()
         if 'vpn' in cat:
-            scores['vpn'] = max(0, scores['vpn'] - severity_weights.get(sev, 0))
+            vpn_findings.append(f)
         else:
-            scores['system'] = max(0, scores['system'] - severity_weights.get(sev, 0))
+            sys_findings.append(f)
     
-    return scores
+    return {
+        'firewall': calc_score(fw_findings),
+        'dns': calc_score(dns_findings),
+        'system': calc_score(sys_findings),
+        'vpn': calc_score(vpn_findings)
+    }
 
 
 @app.route('/api/data/raw', methods=['GET'])

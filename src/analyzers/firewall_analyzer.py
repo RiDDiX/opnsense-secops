@@ -212,13 +212,37 @@ class FirewallAnalyzer:
         return findings
 
     def _is_any_to_any(self, rule: Dict) -> bool:
-        """Check if rule is any-to-any"""
+        """Check if rule is a dangerous any-to-any rule.
+        
+        Rules on internal interfaces (LAN, VLAN, VPN, OpenVPN, WireGuard, IPsec)
+        with src=any dst=any are standard outbound access rules and NOT flagged.
+        Only WAN or floating rules with any-to-any are truly dangerous.
+        """
         src = rule.get("source_net", "").lower()
         dst = rule.get("destination_net", "").lower()
+        interface = rule.get("interface", "").lower()
+        action = rule.get("action", "").lower()
 
         any_values = ["any", "", "0.0.0.0/0", "::/0"]
 
-        return src in any_values and dst in any_values
+        if src not in any_values or dst not in any_values:
+            return False
+
+        # Only pass rules are a concern
+        if action != "pass":
+            return False
+
+        # Internal/VPN interfaces: src=any dst=any is normal outbound access
+        internal_patterns = [
+            "lan", "vlan", "opt", "openvpn", "ovpn", "wireguard", "wg",
+            "ipsec", "vpn", "tailscale", "zerotier", "tun", "tap"
+        ]
+        for pattern in internal_patterns:
+            if pattern in interface:
+                return False
+
+        # WAN or floating/unknown interface with any-to-any is dangerous
+        return True
 
     def _is_insecure_wan_rule(self, rule: Dict) -> bool:
         """Check if rule allows insecure WAN access"""
@@ -248,11 +272,28 @@ class FirewallAnalyzer:
         return rule.get("log", "0") == "1"
 
     def _is_overly_permissive(self, rule: Dict) -> bool:
-        """Check if rule is overly permissive with protocols"""
+        """Check if rule is overly permissive with protocols.
+        
+        Only flag on WAN or floating rules. Internal/VPN interfaces
+        commonly use protocol 'any' for standard outbound access.
+        """
         protocol = rule.get("protocol", "").lower()
         action = rule.get("action", "").lower()
+        interface = rule.get("interface", "").lower()
 
-        return protocol in ["any", ""] and action == "pass"
+        if protocol not in ["any", ""] or action != "pass":
+            return False
+
+        # Internal/VPN interfaces: protocol 'any' is standard practice
+        internal_patterns = [
+            "lan", "vlan", "opt", "openvpn", "ovpn", "wireguard", "wg",
+            "ipsec", "vpn", "tailscale", "zerotier", "tun", "tap"
+        ]
+        for pattern in internal_patterns:
+            if pattern in interface:
+                return False
+
+        return True
 
     def _is_critical_port_forward(self, port: str) -> bool:
         """Check if port forward is to a critical service"""
