@@ -7,7 +7,6 @@
 
     const API = {
         config: '/api/config',
-        configSave: '/api/config/save',
         testConnection: '/api/connection/test',
         scan: {
             start: '/api/scan/start',
@@ -23,7 +22,8 @@
         pollInterval: null,
         results: null,
         config: null,
-        scanStartTime: null
+        scanStartTime: null,
+        lastLogIndex: 0
     };
 
     // Initialize
@@ -100,12 +100,12 @@
         try {
             const res = await fetch(API.config);
             const data = await res.json();
-            if (data.success) {
-                state.config = data.config;
-                document.getElementById('cfg-host').value = data.config.host || '';
-                document.getElementById('cfg-apikey').value = data.config.api_key || '';
-                document.getElementById('cfg-apisecret').value = data.config.api_secret || '';
-                document.getElementById('opnsense-host').textContent = data.config.host || 'Nicht konfiguriert';
+            if (data.success && data.opnsense) {
+                state.config = data.opnsense;
+                document.getElementById('cfg-host').value = data.opnsense.host || '';
+                document.getElementById('cfg-apikey').value = data.opnsense.api_key || '';
+                document.getElementById('cfg-apisecret').value = data.opnsense.api_secret || '';
+                document.getElementById('opnsense-host').textContent = data.opnsense.host || 'Nicht konfiguriert';
                 updateConnectionStatus(false);
             }
         } catch (err) {
@@ -121,10 +121,10 @@
         };
 
         try {
-            const res = await fetch(API.configSave, {
+            const res = await fetch(API.config, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
+                body: JSON.stringify({ opnsense: config })
             });
             const data = await res.json();
             if (data.success) {
@@ -199,6 +199,7 @@
 
         state.scanning = true;
         state.scanStartTime = Date.now();
+        state.lastLogIndex = 0;
         showScanPanel();
         clearScanLog();
         addScanLog('info', 'Security Scan wird gestartet...');
@@ -249,14 +250,11 @@
 
             updateScanProgress(data);
 
-            // Process new log entries
-            if (data.logs && data.logs.length > 0) {
-                const lastLogs = data.logs.slice(-5);
-                lastLogs.forEach(log => {
-                    if (!document.querySelector(`[data-log-id="${log.timestamp}-${log.message.substring(0,20)}"]`)) {
-                        addScanLogEntry(log);
-                    }
-                });
+            // Process new log entries since last poll
+            if (data.logs && data.logs.length > state.lastLogIndex) {
+                const newLogs = data.logs.slice(state.lastLogIndex);
+                newLogs.forEach(log => addScanLogEntry(log));
+                state.lastLogIndex = data.logs.length;
             }
 
             if (data.status === 'completed') {
@@ -647,8 +645,9 @@
                 </div>
             `;
         } else {
-            container.innerHTML = sysFindings.map(f => `
-                <div class="status-card" style="cursor:pointer" onclick='showFindingDetail(${JSON.stringify(f).replace(/'/g, "\\'")})'>
+            window._sysFindings = sysFindings;
+            container.innerHTML = sysFindings.map((f, i) => `
+                <div class="status-card" style="cursor:pointer" data-sys-index="${i}">
                     <div class="status-icon" style="background:${getSeverityBg(f.severity)};color:${getSeverityColor(f.severity)}">
                         <i class="fas fa-exclamation-triangle"></i>
                     </div>
@@ -658,6 +657,12 @@
                     </div>
                 </div>
             `).join('');
+            container.querySelectorAll('[data-sys-index]').forEach(card => {
+                card.addEventListener('click', () => {
+                    const idx = parseInt(card.dataset.sysIndex, 10);
+                    if (window._sysFindings[idx]) showFindingDetail(window._sysFindings[idx]);
+                });
+            });
         }
     }
 

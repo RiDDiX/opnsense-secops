@@ -24,7 +24,7 @@ class ScanManager:
         self.status = 'idle'  # idle, running, completed, failed, cancelled
         self.progress = 0
         self.current_step = ''
-        self.total_steps = 7
+        self.total_steps = 8
         self.step_number = 0
         self.started_at = None
         self.completed_at = None
@@ -296,8 +296,8 @@ def start_scan():
                     scan_manager.status = 'cancelled'
                     return
                 
-                # Step 7: Generate reports
-                if not scan_manager.update('Generating reports...', 7):
+                # Step 8: Generate reports
+                if not scan_manager.update('Generating reports...', 8):
                     return
                 
                 report_files = auditor.report_generator.generate_reports(results, REPORTS_DIR)
@@ -1196,37 +1196,6 @@ def get_internal_scan_status():
         'success': True,
         **internal_scan_state
     })
-
-
-# ═══════════════════════════════════════════════════════════════
-# NEW DASHBOARD API ENDPOINTS (v2)
-# ═══════════════════════════════════════════════════════════════
-
-@app.route('/api/config/save', methods=['POST'])
-def save_config_v2():
-    """Save configuration (simplified for new dashboard)"""
-    try:
-        data = request.json
-        config_file = os.path.join(CONFIG_DIR, 'opnsense.json')
-        
-        config = {
-            'host': data.get('host', ''),
-            'api_key': data.get('api_key', ''),
-            'api_secret': data.get('api_secret', '')
-        }
-        
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(config_file, 'w') as f:
-            json.dump(config, f, indent=2)
-        
-        # Update environment
-        for key, val in config.items():
-            if val:
-                os.environ[f'OPNSENSE_{key.upper()}'] = val
-        
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/connection/test', methods=['POST'])

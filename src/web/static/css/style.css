@@ -847,8 +847,48 @@ body {
 .detail-path i { margin-right: 8px; }
 
 /* ═══════════════════════════════════════════════════════════════
+   FIREWALL VIEW
+═══════════════════════════════════════════════════════════════ */
+.rules-analysis {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+.rules-list {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════
    DNS & SYSTEM VIEWS
 ═══════════════════════════════════════════════════════════════ */
+.dns-analysis {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+.dns-servers {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+}
+.dns-servers h3 {
+    font-size: 1rem;
+    margin-bottom: 16px;
+}
+.server-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.system-analysis {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
 .dns-status-cards, .system-checks {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
