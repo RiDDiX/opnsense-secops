@@ -448,7 +448,9 @@
             return;
         }
 
-        container.innerHTML = allFindings.map(f => renderFindingItem(f)).join('');
+        // Reset findings array
+        window._findings = [];
+        container.innerHTML = allFindings.map((f, i) => renderFindingItem(f, i)).join('');
         attachFindingListeners(container);
     }
 
@@ -473,19 +475,24 @@
                    (severityOrder[b.severity?.toLowerCase()] || 4);
         });
 
-        container.innerHTML = allFindings.map(f => renderFindingItem(f)).join('');
+        // Reset findings array
+        window._findings = [];
+        container.innerHTML = allFindings.map((f, i) => renderFindingItem(f, i)).join('');
         attachFindingListeners(container);
     }
 
-    function renderFindingItem(finding) {
+    function renderFindingItem(finding, index) {
         const severity = (finding.severity || 'low').toLowerCase();
         const title = finding.issue || finding.check || 'Unbekanntes Finding';
         const desc = finding.reason || finding.description || '';
         const path = finding.opnsense_path || '';
-        const category = finding.category || getCategory(finding);
+
+        // Store finding in global array, use index as reference
+        if (!window._findings) window._findings = [];
+        window._findings[index] = finding;
 
         return `
-            <div class="finding-item ${severity}" data-finding='${JSON.stringify(finding).replace(/'/g, "\\'")}'>
+            <div class="finding-item ${severity}" data-finding-index="${index}">
                 <div class="finding-severity-bar"></div>
                 <span class="finding-badge">${severity}</span>
                 <div class="finding-content">
@@ -508,8 +515,9 @@
     function attachFindingListeners(container) {
         container.querySelectorAll('.finding-item').forEach(item => {
             item.addEventListener('click', () => {
-                const finding = JSON.parse(item.dataset.finding);
-                showFindingDetail(finding);
+                const index = parseInt(item.dataset.findingIndex, 10);
+                const finding = window._findings[index];
+                if (finding) showFindingDetail(finding);
             });
         });
     }
@@ -586,7 +594,8 @@
                 </div>
             `;
         } else {
-            container.innerHTML = fwFindings.map(f => renderFindingItem(f)).join('');
+            window._findings = [];
+            container.innerHTML = fwFindings.map((f, i) => renderFindingItem(f, i)).join('');
             attachFindingListeners(container);
         }
     }
@@ -703,7 +712,8 @@
                 </div>
             `;
         } else {
-            container.innerHTML = findings.map(f => renderFindingItem(f)).join('');
+            window._findings = [];
+            container.innerHTML = findings.map((f, i) => renderFindingItem(f, i)).join('');
             attachFindingListeners(container);
         }
     }
