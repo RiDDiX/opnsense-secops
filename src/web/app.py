@@ -1284,7 +1284,8 @@ def calculate_category_scores(results):
         return max(0, round(100 - total_penalty))
     
     # Split findings into categories
-    fw_findings = results.get('firewall_findings', [])
+    # Port findings (WAN-exposed) count towards firewall score
+    fw_findings = results.get('firewall_findings', []) + results.get('port_findings', [])
     dns_findings = results.get('dns_findings', [])
     sys_findings = []
     vpn_findings = []

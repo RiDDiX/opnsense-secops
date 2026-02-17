@@ -88,6 +88,7 @@
         document.getElementById('btn-save-config').addEventListener('click', saveConfig);
         document.getElementById('modal-close').addEventListener('click', closeModal);
         document.querySelector('.modal-backdrop').addEventListener('click', closeModal);
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
         // Filters
         document.getElementById('filter-severity').addEventListener('change', applyFilters);
@@ -406,7 +407,14 @@
     function setBreakdownScore(category, score) {
         const bar = document.getElementById(`score-${category}`);
         const val = document.getElementById(`score-${category}-val`);
-        if (bar) bar.style.width = score + '%';
+        if (bar) {
+            bar.style.width = score + '%';
+            let color = '#ff6b6b';
+            if (score >= 80) color = '#69db7c';
+            else if (score >= 60) color = '#ffd43b';
+            else if (score >= 40) color = '#ffa94d';
+            bar.style.background = color;
+        }
         if (val) val.textContent = score + '%';
     }
 
@@ -423,6 +431,7 @@
     function getAllFindings(results) {
         return [
             ...(results.firewall_findings || []),
+            ...(results.port_findings || []),
             ...(results.dns_findings || []),
             ...(results.system_findings || []),
             ...(results.vulnerability_findings || []),
@@ -504,10 +513,14 @@
     }
 
     function getCategory(finding) {
-        if (finding.rule_id) return 'Firewall';
+        if (finding.rule_id || finding.rule_description) return 'Firewall';
+        if (finding.wan_exposed || finding.details?.wan_exposed) return 'Firewall';
         if (finding.check?.includes('dns') || finding.check?.includes('unbound')) return 'DNS';
-        if (finding.check?.includes('ssh') || finding.check?.includes('webgui')) return 'System';
-        return 'Sonstiges';
+        if (finding.check?.includes('ssh') || finding.check?.includes('webgui') || finding.check?.includes('ids')) return 'System';
+        if (finding.category?.toLowerCase().includes('vpn') || finding.check?.includes('vpn') || finding.check?.includes('wg_')) return 'VPN';
+        if (finding.vlan_id !== undefined) return 'VLAN';
+        if (finding.cve_id) return 'Vulnerability';
+        return 'System';
     }
 
     function attachFindingListeners(container) {

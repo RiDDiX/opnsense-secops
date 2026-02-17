@@ -263,7 +263,10 @@ class NetworkDiscovery:
             for service in device.services.values():
                 stats["unique_services"].add(service)
 
-        # Convert sets to lists for JSON serialization
+        # Convert non-serializable types for JSON
         stats["unique_services"] = list(stats["unique_services"])
+        stats["devices_by_network"] = dict(stats["devices_by_network"])
+        stats["devices_by_vlan"] = dict(stats["devices_by_vlan"])
+        stats["devices_by_vendor"] = dict(stats["devices_by_vendor"])
 
         return stats

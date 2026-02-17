@@ -21,13 +21,17 @@ from src.analyzers.system_security_analyzer import SystemSecurityAnalyzer
 from src.analyzers.optimal_config_generator import OptimalConfigGenerator
 
 # Configure logging
+_log_handlers = [logging.StreamHandler(sys.stdout)]
+try:
+    os.makedirs('/app/reports', exist_ok=True)
+    _log_handlers.append(logging.FileHandler('/app/reports/audit.log'))
+except OSError:
+    pass  # Running outside Docker, skip file logging
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('/app/reports/audit.log')
-    ]
+    handlers=_log_handlers
 )
 logger = logging.getLogger(__name__)
 
@@ -433,7 +437,8 @@ class SecurityAuditor:
             vuln_findings.extend(opnsense_vulns)
 
         # Check for critical service vulnerabilities
-        critical_services = [{"name": s} for s in set(service_map.values()) if s]
+        unique_service_names = set(v.get("name", "") if isinstance(v, dict) else str(v) for v in service_map.values())
+        critical_services = [{"name": s} for s in unique_service_names if s]
         critical_vulns = self.vulnerability_scanner.check_critical_services(critical_services)
         vuln_findings.extend(critical_vulns)
 

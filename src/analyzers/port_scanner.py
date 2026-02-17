@@ -19,10 +19,11 @@ class PortFinding:
     host: str
     port: int
     service: str
-    state: str
     issue: str
     reason: str
     solution: str
+    state: str = "open"
+    details: Dict = None
 
 
 class PortScanner:
@@ -117,7 +118,7 @@ class PortScanner:
                 continue
             
             # Check if this is an excepted port
-            if self._is_port_excepted(port, internal_ip):
+            if self._is_excepted(internal_ip, port):
                 logger.debug(f"Port {port} on {internal_ip} is excepted")
                 continue
             

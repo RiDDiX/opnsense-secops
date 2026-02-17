@@ -41,21 +41,25 @@ class OptimalConfigGenerator:
             "implementation_guide": self._get_implementation_guide()
         }
 
-        # Calculate score based on findings
-        findings_count = {
-            "critical": audit_results.get("summary", {}).get("critical", 0),
-            "high": audit_results.get("summary", {}).get("high", 0),
-            "medium": audit_results.get("summary", {}).get("medium", 0),
-            "low": audit_results.get("summary", {}).get("low", 0)
-        }
-
-        # Score calculation: Start at 100, deduct points
-        score = 100
-        score -= findings_count["critical"] * 15
-        score -= findings_count["high"] * 8
-        score -= findings_count["medium"] * 3
-        score -= findings_count["low"] * 1
-        score = max(0, score)
+        # Calculate score based on all findings with diminishing returns
+        severity_weights = {'CRITICAL': 15, 'HIGH': 8, 'MEDIUM': 3, 'LOW': 1}
+        all_findings = []
+        for key in ['firewall_findings', 'port_findings', 'dns_findings',
+                     'vlan_findings', 'vulnerability_findings', 'system_findings']:
+            all_findings.extend(audit_results.get(key, []))
+        
+        # Sort by severity (most severe first) for fair diminishing
+        sev_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+        all_findings.sort(key=lambda f: sev_order.get(
+            (f.get('severity', '') or '').upper(), 4))
+        
+        total_penalty = 0
+        for i, f in enumerate(all_findings):
+            sev = (f.get('severity', '') or '').upper()
+            weight = severity_weights.get(sev, 0)
+            diminish = 1.0 / (1 + i * 0.15)
+            total_penalty += weight * diminish
+        score = max(0, round(100 - total_penalty))
 
         recommendations["security_score"] = score
         recommendations["grade"] = self._score_to_grade(score)
