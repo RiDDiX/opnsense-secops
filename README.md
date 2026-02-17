@@ -256,6 +256,20 @@ Firewall-Regel für API-Zugriff vom Docker-Netzwerk prüfen.
 
 ---
 
+## ☕ Support the Project
+
+> [!NOTE]
+> **Completely optional!** This project will continue regardless of donations.
+> I maintain this in my free time because I believe in open source.
+
+If you find this project useful, consider supporting its development:
+
+[![PayPal](https://img.shields.io/badge/PayPal-Donate-blue?logo=paypal&style=for-the-badge)](https://www.paypal.me/RiDDiX93)
+
+Your support helps cover hosting costs and motivates continued development. Thank you! ❤️
+
+---
+
 ## Lizenz
 
 MIT
