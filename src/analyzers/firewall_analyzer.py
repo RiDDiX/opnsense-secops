@@ -217,11 +217,16 @@ class FirewallAnalyzer:
         Rules on internal interfaces (LAN, VLAN, VPN, OpenVPN, WireGuard, IPsec)
         with src=any dst=any are standard outbound access rules and NOT flagged.
         Only WAN or floating rules with any-to-any are truly dangerous.
+        
+        Rules with specific destination_port and/or protocol are NOT any-to-any
+        because they restrict traffic to a specific service.
         """
         src = rule.get("source_net", "").lower()
         dst = rule.get("destination_net", "").lower()
         interface = rule.get("interface", "").lower()
         action = rule.get("action", "").lower()
+        dst_port = rule.get("destination_port", "").strip()
+        protocol = rule.get("protocol", "").lower()
 
         any_values = ["any", "", "0.0.0.0/0", "::/0"]
 
@@ -230,6 +235,14 @@ class FirewallAnalyzer:
 
         # Only pass rules are a concern
         if action != "pass":
+            return False
+
+        # If a specific destination port is set, this is a targeted rule, not any-to-any
+        if dst_port and dst_port not in any_values:
+            return False
+
+        # If a specific protocol is set (not 'any'), this is more targeted
+        if protocol and protocol not in ["any", ""]:
             return False
 
         # Internal/VPN interfaces: src=any dst=any is normal outbound access
@@ -245,17 +258,27 @@ class FirewallAnalyzer:
         return True
 
     def _is_insecure_wan_rule(self, rule: Dict) -> bool:
-        """Check if rule allows insecure WAN access"""
+        """Check if rule allows insecure WAN access.
+        
+        Only flags rules without port restrictions. Rules with specific
+        destination_port are targeted forwards, not unrestricted WAN access.
+        """
         interface = rule.get("interface", "").lower()
         direction = rule.get("direction", "").lower()
         action = rule.get("action", "").lower()
         dst = rule.get("destination_net", "").lower()
+        dst_port = rule.get("destination_port", "").strip()
 
         # Check if it's an incoming WAN rule that allows traffic
         is_wan = "wan" in interface
         is_incoming = direction == "in"
         is_allow = action == "pass"
         is_broad_destination = dst in ["any", "", "0.0.0.0/0"]
+        has_port_restriction = dst_port and dst_port not in ["any", ""]
+
+        # Rules with specific port restrictions are targeted, not unrestricted
+        if has_port_restriction:
+            return False
 
         return is_wan and is_incoming and is_allow and is_broad_destination
 

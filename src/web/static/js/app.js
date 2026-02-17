@@ -441,7 +441,7 @@
 
     function renderTopFindings(results) {
         const container = document.getElementById('top-findings-list');
-        const allFindings = getAllFindings(results)
+        const allFindings = sortBySeverity(getAllFindings(results))
             .filter(f => ['critical', 'high'].includes((f.severity || '').toLowerCase()))
             .slice(0, 5);
 
@@ -455,15 +455,21 @@
             return;
         }
 
-        // Reset findings array
-        window._findings = [];
-        container.innerHTML = allFindings.map((f, i) => renderFindingItem(f, i)).join('');
+        container.innerHTML = allFindings.map((f, i) => renderFindingItem(f, 'top_' + i)).join('');
         attachFindingListeners(container);
+    }
+
+    function sortBySeverity(findings) {
+        const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+        return [...findings].sort((a, b) => {
+            return (severityOrder[(a.severity || '').toLowerCase()] || 4) - 
+                   (severityOrder[(b.severity || '').toLowerCase()] || 4);
+        });
     }
 
     function renderFindings(results) {
         const container = document.getElementById('all-findings-list');
-        const allFindings = getAllFindings(results);
+        const allFindings = sortBySeverity(getAllFindings(results));
 
         if (allFindings.length === 0) {
             container.innerHTML = `
@@ -475,31 +481,22 @@
             return;
         }
 
-        // Sort by severity
-        const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-        allFindings.sort((a, b) => {
-            return (severityOrder[a.severity?.toLowerCase()] || 4) - 
-                   (severityOrder[b.severity?.toLowerCase()] || 4);
-        });
-
-        // Reset findings array
-        window._findings = [];
-        container.innerHTML = allFindings.map((f, i) => renderFindingItem(f, i)).join('');
+        container.innerHTML = allFindings.map((f, i) => renderFindingItem(f, 'all_' + i)).join('');
         attachFindingListeners(container);
     }
 
-    function renderFindingItem(finding, index) {
+    function renderFindingItem(finding, key) {
         const severity = (finding.severity || 'low').toLowerCase();
         const title = finding.issue || finding.check || 'Unbekanntes Finding';
         const desc = finding.reason || finding.description || '';
         const path = finding.opnsense_path || '';
 
-        // Store finding in global array, use index as reference
-        if (!window._findings) window._findings = [];
-        window._findings[index] = finding;
+        // Store finding in global map, keyed by unique ID
+        if (!window._findingsMap) window._findingsMap = {};
+        window._findingsMap[key] = finding;
 
         return `
-            <div class="finding-item ${severity}" data-finding-index="${index}">
+            <div class="finding-item ${severity}" data-finding-key="${key}">
                 <div class="finding-severity-bar"></div>
                 <span class="finding-badge">${severity}</span>
                 <div class="finding-content">
@@ -526,8 +523,8 @@
     function attachFindingListeners(container) {
         container.querySelectorAll('.finding-item').forEach(item => {
             item.addEventListener('click', () => {
-                const index = parseInt(item.dataset.findingIndex, 10);
-                const finding = window._findings[index];
+                const key = item.dataset.findingKey;
+                const finding = window._findingsMap && window._findingsMap[key];
                 if (finding) showFindingDetail(finding);
             });
         });
@@ -605,8 +602,8 @@
                 </div>
             `;
         } else {
-            window._findings = [];
-            container.innerHTML = fwFindings.map((f, i) => renderFindingItem(f, i)).join('');
+            const sorted = sortBySeverity(fwFindings);
+            container.innerHTML = sorted.map((f, i) => renderFindingItem(f, 'fw_' + i)).join('');
             attachFindingListeners(container);
         }
     }
@@ -702,7 +699,7 @@
         const category = document.getElementById('filter-category').value;
         const search = document.getElementById('filter-search').value.toLowerCase();
 
-        let findings = getAllFindings(state.results);
+        let findings = sortBySeverity(getAllFindings(state.results));
 
         if (severity !== 'all') {
             findings = findings.filter(f => (f.severity || '').toLowerCase() === severity);
@@ -730,8 +727,7 @@
                 </div>
             `;
         } else {
-            window._findings = [];
-            container.innerHTML = findings.map((f, i) => renderFindingItem(f, i)).join('');
+            container.innerHTML = findings.map((f, i) => renderFindingItem(f, 'filter_' + i)).join('');
             attachFindingListeners(container);
         }
     }
