@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 class ReportGenerator:
     """Generates security audit reports"""
 
-    def __init__(self, report_options: Dict):
-        self.options = report_options
+    def __init__(self, report_options: Dict = None):
+        self.options = report_options or {}
         self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def generate_reports(self, audit_results: Dict, output_dir: str = "/app/reports") -> List[str]:
@@ -164,9 +164,9 @@ class ReportGenerator:
 
         return "\n".join(lines)
 
-    def _generate_html_report(self, results: Dict, output_file: str):
-        """Generate HTML report with dark technical theme"""
-        html_template = """
+    def _get_html_template(self) -> str:
+        """Return the HTML report template string"""
+        return """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -341,30 +341,37 @@ class ReportGenerator:
 </html>
         """
 
+    def _generate_html_report(self, results: Dict, output_file: str):
+        """Generate HTML report with dark technical theme"""
         try:
-            template = Template(html_template)
-            html_content = template.render(
-                timestamp=self.timestamp,
-                opnsense_host=results.get("opnsense_host", "Unknown"),
-                summary=results.get("summary", {}),
-                security_score=results.get("security_score"),
-                security_grade=results.get("security_grade", "N/A"),
-                firewall_findings=results.get("firewall_findings", []),
-                port_findings=results.get("port_findings", []),
-                dns_findings=results.get("dns_findings", []),
-                vlan_findings=results.get("vlan_findings", []),
-                vulnerability_findings=results.get("vulnerability_findings", []),
-                system_findings=results.get("system_findings", []),
-                statistics=results.get("statistics", {}),
-                include_solutions=self.options.get("include_solutions", True)
-            )
-
+            html_content = self.generate_html_report(results)
             with open(output_file, 'w', encoding='utf-8') as f:
                 f.write(html_content)
-
             logger.info(f"HTML report generated: {output_file}")
         except Exception as e:
             logger.error(f"Failed to generate HTML report: {e}")
+
+    def generate_html_report(self, results: Dict) -> str:
+        """Generate HTML report and return as string (for API download)"""
+        # Reuse the private method's template by rendering to string
+        from jinja2 import Template
+        html_template = self._get_html_template()
+        template = Template(html_template)
+        return template.render(
+            timestamp=results.get("scan_timestamp", datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+            opnsense_host=results.get("opnsense_host", "Unknown"),
+            summary=results.get("summary", {}),
+            security_score=results.get("security_score"),
+            security_grade=results.get("security_grade", "N/A"),
+            firewall_findings=results.get("firewall_findings", []),
+            port_findings=results.get("port_findings", []),
+            dns_findings=results.get("dns_findings", []),
+            vlan_findings=results.get("vlan_findings", []),
+            vulnerability_findings=results.get("vulnerability_findings", []),
+            system_findings=results.get("system_findings", []),
+            statistics=results.get("statistics", {}),
+            include_solutions=True
+        )
 
     def print_summary(self, results: Dict):
         """Print summary to console"""

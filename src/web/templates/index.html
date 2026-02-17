@@ -37,6 +37,10 @@
                 <i class="fas fa-server"></i>
                 <span>System</span>
             </li>
+            <li class="nav-item" data-view="network">
+                <i class="fas fa-laptop"></i>
+                <span>Netzwerk</span>
+            </li>
             <li class="nav-item" data-view="config">
                 <i class="fas fa-cog"></i>
                 <span>Konfiguration</span>
@@ -66,6 +70,9 @@
                 <button class="btn btn-primary" id="btn-start-scan">
                     <i class="fas fa-play"></i>
                     <span>Scan starten</span>
+                </button>
+                <button class="btn btn-ghost" id="btn-download-report" title="Report herunterladen" style="display:none">
+                    <i class="fas fa-download"></i>
                 </button>
                 <button class="btn btn-ghost" id="btn-refresh">
                     <i class="fas fa-sync-alt"></i>
@@ -230,6 +237,20 @@
                     </div>
                 </div>
             </section>
+
+            <!-- Scan History / Trend -->
+            <section class="scan-history" id="scan-history-section" style="display:none">
+                <div class="section-header">
+                    <h2><i class="fas fa-chart-line"></i> Scan-Verlauf</h2>
+                </div>
+                <div class="history-chart" id="history-chart">
+                    <div class="no-data">
+                        <i class="fas fa-chart-line"></i>
+                        <p>Mindestens 2 Scans für Trend-Anzeige nötig</p>
+                    </div>
+                </div>
+                <div class="history-table" id="history-table"></div>
+            </section>
         </div>
 
         <!-- Findings View -->
@@ -249,6 +270,8 @@
                         <option value="dns">DNS</option>
                         <option value="system">System</option>
                         <option value="vpn">VPN</option>
+                        <option value="vlan">VLAN</option>
+                        <option value="vulnerability">Vulnerabilities</option>
                     </select>
                     <input type="search" id="filter-search" class="filter-search" placeholder="Suchen...">
                 </div>
@@ -331,6 +354,56 @@
             </div>
         </div>
 
+        <!-- Network Devices View -->
+        <div class="view" id="view-network">
+            <div class="view-header">
+                <h2>Netzwerk-Geräte</h2>
+                <div class="header-actions">
+                    <input type="search" id="device-search" class="filter-search" placeholder="IP, Hostname, MAC suchen...">
+                </div>
+            </div>
+            <div class="device-stats" id="device-stats">
+                <div class="stat-card">
+                    <i class="fas fa-laptop"></i>
+                    <div class="stat-data">
+                        <span class="stat-value" id="stat-total-devices">--</span>
+                        <span class="stat-label">Geräte</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-door-open"></i>
+                    <div class="stat-data">
+                        <span class="stat-value" id="stat-total-open-ports">--</span>
+                        <span class="stat-label">Offene Ports</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-network-wired"></i>
+                    <div class="stat-data">
+                        <span class="stat-value" id="stat-total-networks">--</span>
+                        <span class="stat-label">Netzwerke</span>
+                    </div>
+                </div>
+            </div>
+            <div class="devices-table-container">
+                <table class="devices-table" id="devices-table">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>IP-Adresse</th>
+                            <th>Hostname</th>
+                            <th>MAC-Adresse</th>
+                            <th>Netzwerk</th>
+                            <th>Offene Ports</th>
+                        </tr>
+                    </thead>
+                    <tbody id="devices-tbody">
+                        <tr><td colspan="6" class="no-data-cell">Starte einen Netzwerk-Scan um Geräte zu sehen</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- System View -->
         <div class="view" id="view-system">
             <div class="view-header">
@@ -391,6 +464,11 @@
                 <button class="modal-close" id="modal-close"><i class="fas fa-times"></i></button>
             </div>
             <div class="modal-body" id="modal-body"></div>
+            <div class="modal-footer" id="modal-footer">
+                <button class="btn btn-sm btn-ghost" id="btn-exclude-finding" title="Finding zur Ausnahmeliste hinzufügen">
+                    <i class="fas fa-eye-slash"></i> Ausschließen
+                </button>
+            </div>
         </div>
     </div>
 

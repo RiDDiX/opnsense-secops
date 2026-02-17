@@ -5,7 +5,7 @@ Flask-based web interface for managing scans and viewing results
 import os
 import json
 import logging
-from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 from datetime import datetime
 import sys
@@ -386,6 +386,45 @@ def list_reports():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/reports/history', methods=['GET'])
+def get_scan_history():
+    """Get scan history with scores for trend display"""
+    try:
+        history = []
+        if not os.path.exists(REPORTS_DIR):
+            return jsonify({'success': True, 'history': []})
+        
+        for filename in os.listdir(REPORTS_DIR):
+            if filename.startswith('security_audit_') and filename.endswith('.json'):
+                filepath = os.path.join(REPORTS_DIR, filename)
+                try:
+                    with open(filepath, 'r') as f:
+                        report = json.load(f)
+                    
+                    summary = report.get('summary', {})
+                    entry = {
+                        'filename': filename,
+                        'timestamp': report.get('scan_timestamp', ''),
+                        'score': report.get('security_score', 0),
+                        'grade': report.get('security_grade', 'F'),
+                        'total_findings': summary.get('total_findings', 0),
+                        'critical': summary.get('critical', 0),
+                        'high': summary.get('high', 0),
+                        'medium': summary.get('medium', 0),
+                        'low': summary.get('low', 0),
+                        'category_scores': calculate_category_scores(report)
+                    }
+                    history.append(entry)
+                except Exception as e:
+                    logger.debug(f"Skipping corrupt report {filename}: {e}")
+        
+        history.sort(key=lambda x: x['timestamp'])
+        return jsonify({'success': True, 'history': history})
+    except Exception as e:
+        logger.error(f"Failed to get scan history: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/reports/<filename>', methods=['GET'])
 def get_report(filename):
     """Get a specific report"""
@@ -414,6 +453,108 @@ def download_report(filename):
         return send_from_directory(REPORTS_DIR, filename, as_attachment=True)
     except Exception as e:
         logger.error(f"Failed to download report: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/reports/<filename>/html', methods=['GET'])
+def download_html_report(filename):
+    """Generate and download HTML report from JSON report"""
+    try:
+        json_path = os.path.join(REPORTS_DIR, filename)
+        if not os.path.exists(json_path):
+            return jsonify({'success': False, 'error': 'Report not found'}), 404
+        
+        with open(json_path, 'r') as f:
+            report_data = json.load(f)
+        
+        from src.report_generator import ReportGenerator
+        generator = ReportGenerator()
+        html_content = generator.generate_html_report(report_data)
+        
+        html_filename = filename.replace('.json', '.html')
+        return Response(
+            html_content,
+            mimetype='text/html',
+            headers={'Content-Disposition': f'attachment; filename={html_filename}'}
+        )
+    except Exception as e:
+        logger.error(f"Failed to generate HTML report: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/ignore-list/add-finding', methods=['POST'])
+def add_finding_to_ignore_list():
+    """Add a finding to ignore list (auto-categorize based on finding type)"""
+    try:
+        data = request.json
+        finding = data.get('finding', {})
+        
+        # Auto-detect category from finding structure
+        if finding.get('rule_id') or finding.get('rule_description'):
+            category = 'firewall_exceptions'
+            item = {
+                'rule_id': finding.get('rule_id', ''),
+                'description': finding.get('rule_description', finding.get('issue', '')),
+                'reason': data.get('reason', 'Manuell ausgeschlossen')
+            }
+        elif finding.get('port') and (finding.get('host') or finding.get('wan_exposed')):
+            category = 'port_exceptions'
+            item = {
+                'port': finding.get('port'),
+                'host': finding.get('host', ''),
+                'description': finding.get('issue', ''),
+                'reason': data.get('reason', 'Manuell ausgeschlossen')
+            }
+        elif finding.get('check') and ('dns' in finding.get('check', '') or 'unbound' in finding.get('check', '')):
+            category = 'dns_exceptions'
+            item = {
+                'check': finding.get('check', ''),
+                'description': finding.get('issue', ''),
+                'reason': data.get('reason', 'Manuell ausgeschlossen')
+            }
+        elif finding.get('vlan_id') is not None:
+            category = 'vlan_exceptions'
+            item = {
+                'vlan_id': finding.get('vlan_id'),
+                'description': finding.get('issue', ''),
+                'reason': data.get('reason', 'Manuell ausgeschlossen')
+            }
+        elif finding.get('cve_id'):
+            category = 'vulnerability_exceptions'
+            item = {
+                'cve_id': finding.get('cve_id', ''),
+                'description': finding.get('issue', ''),
+                'reason': data.get('reason', 'Manuell ausgeschlossen')
+            }
+        else:
+            category = 'system_exceptions'
+            item = {
+                'check': finding.get('check', ''),
+                'category': finding.get('category', ''),
+                'description': finding.get('issue', ''),
+                'reason': data.get('reason', 'Manuell ausgeschlossen')
+            }
+        
+        config_loader = ConfigLoader(CONFIG_DIR)
+        _, exceptions = config_loader.load_all()
+        
+        if category not in exceptions:
+            exceptions[category] = []
+        exceptions[category].append(item)
+        
+        import yaml
+        exceptions_file = os.path.join(CONFIG_DIR, 'exceptions.yaml')
+        with open(exceptions_file, 'w') as f:
+            yaml.dump(exceptions, f, default_flow_style=False, allow_unicode=True)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Finding zur Ausnahmeliste hinzugefügt',
+            'category': category,
+            'item': item
+        })
+    except Exception as e:
+        logger.error(f"Failed to add finding to ignore list: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

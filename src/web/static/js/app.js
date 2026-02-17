@@ -14,7 +14,10 @@
             cancel: '/api/scan/cancel'
         },
         results: '/api/results/latest',
-        rawData: '/api/data/raw'
+        rawData: '/api/data/raw',
+        history: '/api/reports/history',
+        ignoreFinding: '/api/ignore-list/add-finding',
+        internalScan: '/api/scan/internal/status'
     };
 
     let state = {
@@ -23,7 +26,9 @@
         results: null,
         config: null,
         scanStartTime: null,
-        lastLogIndex: 0
+        lastLogIndex: 0,
+        currentFinding: null,
+        reportFile: null
     };
 
     // Initialize
@@ -74,6 +79,7 @@
             firewall: 'Firewall Analyse',
             dns: 'DNS Sicherheit',
             system: 'System Sicherheit',
+            network: 'Netzwerk-Geräte',
             config: 'Konfiguration'
         };
         document.getElementById('view-title').textContent = titles[viewName] || viewName;
@@ -94,6 +100,16 @@
         document.getElementById('filter-severity').addEventListener('change', applyFilters);
         document.getElementById('filter-category').addEventListener('change', applyFilters);
         document.getElementById('filter-search').addEventListener('input', applyFilters);
+
+        // Download report
+        document.getElementById('btn-download-report').addEventListener('click', downloadReport);
+
+        // Exclude finding from modal
+        document.getElementById('btn-exclude-finding').addEventListener('click', excludeCurrentFinding);
+
+        // Device search
+        const deviceSearch = document.getElementById('device-search');
+        if (deviceSearch) deviceSearch.addEventListener('input', filterDevices);
     }
 
     // Config Management
@@ -346,12 +362,18 @@
             const data = await res.json();
             if (data.success && data.results) {
                 state.results = data.results;
+                state.reportFile = data.report_file || null;
                 renderDashboard(data.results);
                 renderFindings(data.results);
                 renderFirewallView(data.results);
                 renderDnsView(data.results);
                 renderSystemView(data.results);
+                renderNetworkDevices(data.results);
                 updateConnectionStatus(true);
+                loadScanHistory();
+                // Show download button if we have results
+                const dlBtn = document.getElementById('btn-download-report');
+                if (dlBtn) dlBtn.style.display = state.reportFile ? '' : 'none';
             }
         } catch (err) {
             console.error('Load results failed:', err);
@@ -531,6 +553,7 @@
     }
 
     function showFindingDetail(finding) {
+        state.currentFinding = finding;
         const modal = document.getElementById('finding-modal');
         const title = document.getElementById('modal-title');
         const body = document.getElementById('modal-body');
@@ -753,6 +776,206 @@
         } catch {
             return ts;
         }
+    }
+
+    // === Report Download ===
+    async function downloadReport() {
+        if (!state.reportFile) return;
+        try {
+            window.open(`/api/reports/${state.reportFile}/html`, '_blank');
+        } catch (err) {
+            console.error('Download failed:', err);
+        }
+    }
+
+    // === Exclude Finding ===
+    async function excludeCurrentFinding() {
+        if (!state.currentFinding) return;
+        const reason = prompt('Grund f\u00fcr Ausschluss (optional):', 'Bewusst akzeptiertes Risiko');
+        if (reason === null) return; // cancelled
+        try {
+            const res = await fetch(API.ignoreFinding, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ finding: state.currentFinding, reason: reason || 'Manuell ausgeschlossen' })
+            });
+            const data = await res.json();
+            if (data.success) {
+                closeModal();
+                const badge = document.createElement('div');
+                badge.className = 'scan-log';
+                badge.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#69db7c;color:#1a1a2e;padding:12px 20px;border-radius:8px;z-index:10000;font-weight:600';
+                badge.textContent = '\u2713 Finding ausgeschlossen';
+                document.body.appendChild(badge);
+                setTimeout(() => badge.remove(), 3000);
+            } else {
+                alert('Fehler: ' + (data.error || 'Unbekannt'));
+            }
+        } catch (err) {
+            alert('Fehler: ' + err.message);
+        }
+    }
+
+    // === Scan History ===
+    async function loadScanHistory() {
+        try {
+            const res = await fetch(API.history);
+            const data = await res.json();
+            if (data.success && data.history && data.history.length >= 2) {
+                renderScanHistory(data.history);
+            }
+        } catch (err) {
+            console.error('Load history failed:', err);
+        }
+    }
+
+    function renderScanHistory(history) {
+        const section = document.getElementById('scan-history-section');
+        if (!section) return;
+        section.style.display = '';
+
+        // Render visual bar chart
+        const chartEl = document.getElementById('history-chart');
+        const maxScore = 100;
+        const barWidth = Math.max(30, Math.min(60, Math.floor(600 / history.length)));
+        
+        let barsHtml = history.map((h, i) => {
+            const score = h.score || 0;
+            const height = Math.max(4, (score / maxScore) * 120);
+            let color = '#ff6b6b';
+            if (score >= 80) color = '#69db7c';
+            else if (score >= 60) color = '#ffd43b';
+            else if (score >= 40) color = '#ffa94d';
+            const label = h.timestamp ? new Date(h.timestamp).toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit'}) : `#${i+1}`;
+            return `
+                <div class="history-bar-col" style="text-align:center;flex:0 0 ${barWidth}px">
+                    <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">${score}</div>
+                    <div style="height:${height}px;background:${color};border-radius:4px 4px 0 0;margin:0 4px;transition:height 0.3s"></div>
+                    <div style="font-size:10px;color:var(--text-muted);margin-top:4px">${label}</div>
+                </div>
+            `;
+        }).join('');
+
+        chartEl.innerHTML = `
+            <div style="display:flex;align-items:flex-end;justify-content:center;min-height:160px;padding:10px 0">
+                ${barsHtml}
+            </div>
+        `;
+
+        // Render table
+        const tableEl = document.getElementById('history-table');
+        tableEl.innerHTML = `
+            <table class="devices-table" style="margin-top:12px">
+                <thead><tr>
+                    <th>Datum</th><th>Score</th><th>Grade</th>
+                    <th>Critical</th><th>High</th><th>Medium</th><th>Low</th>
+                    <th>Gesamt</th>
+                </tr></thead>
+                <tbody>
+                    ${history.slice().reverse().map(h => `
+                        <tr>
+                            <td>${h.timestamp ? new Date(h.timestamp).toLocaleString('de-DE', {day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}) : '--'}</td>
+                            <td><strong>${h.score || 0}</strong></td>
+                            <td><span class="finding-badge ${(h.grade||'F').toLowerCase() <= 'b' ? 'low' : (h.grade||'F') <= 'D' ? 'medium' : 'critical'}" style="font-size:11px">${h.grade || 'F'}</span></td>
+                            <td>${h.critical || 0}</td>
+                            <td>${h.high || 0}</td>
+                            <td>${h.medium || 0}</td>
+                            <td>${h.low || 0}</td>
+                            <td>${h.total_findings || 0}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    }
+
+    // === Network Devices ===
+    function flattenNetworkMap(networkMap) {
+        // network_map format: { "192.168.1.0/24": { "VLAN10": [ {ip, hostname, mac, ...} ] } }
+        const devices = [];
+        if (!networkMap || typeof networkMap !== 'object') return devices;
+        for (const [network, vlans] of Object.entries(networkMap)) {
+            if (typeof vlans !== 'object') continue;
+            for (const [vlan, devList] of Object.entries(vlans)) {
+                if (!Array.isArray(devList)) continue;
+                devList.forEach(d => {
+                    devices.push({ ...d, network: network, vlan: vlan || '' });
+                });
+            }
+        }
+        return devices;
+    }
+
+    function renderNetworkDevices(results) {
+        // Prefer flat devices array, fall back to flattening network_map
+        let devices = results.devices || [];
+        if (devices.length === 0 && results.network_map) {
+            devices = flattenNetworkMap(results.network_map);
+        }
+        const tbody = document.getElementById('devices-tbody');
+        if (!tbody) return;
+
+        // Update stats
+        const totalDevices = devices.length;
+        const totalPorts = devices.reduce((sum, d) => sum + (d.open_ports ? (Array.isArray(d.open_ports) ? d.open_ports.length : d.open_ports) : 0), 0);
+        const networks = new Set(devices.map(d => d.network).filter(Boolean));
+        
+        document.getElementById('stat-total-devices').textContent = totalDevices || '--';
+        document.getElementById('stat-total-open-ports').textContent = totalPorts || '--';
+        document.getElementById('stat-total-networks').textContent = networks.size || '--';
+
+        if (devices.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="no-data-cell">Keine Ger\u00e4te gefunden. Starte einen Netzwerk-Scan.</td></tr>';
+            return;
+        }
+
+        // Sort by IP
+        const sorted = [...devices].sort((a, b) => {
+            const ipA = (a.ip || '').split('.').map(n => parseInt(n) || 0);
+            const ipB = (b.ip || '').split('.').map(n => parseInt(n) || 0);
+            for (let i = 0; i < 4; i++) { if (ipA[i] !== ipB[i]) return ipA[i] - ipB[i]; }
+            return 0;
+        });
+
+        window._allDevices = sorted;
+        tbody.innerHTML = sorted.map(d => renderDeviceRow(d)).join('');
+    }
+
+    function renderDeviceRow(d) {
+        const ports = Array.isArray(d.open_ports) ? d.open_ports : [];
+        const portStr = ports.length > 0 
+            ? ports.slice(0, 8).map(p => `<span class="port-tag">${p}</span>`).join('') + (ports.length > 8 ? ` <span class="port-tag">+${ports.length-8}</span>` : '')
+            : '<span style="color:var(--text-muted)">keine</span>';
+        const statusDot = d.status === 'active' ? 'online' : 'offline';
+        return `
+            <tr class="device-row">
+                <td><span class="status-dot ${statusDot}"></span></td>
+                <td style="font-family:var(--font-mono)">${escapeHtml(d.ip || '')}</td>
+                <td>${escapeHtml(d.hostname || '--')}</td>
+                <td style="font-family:var(--font-mono);font-size:12px">${escapeHtml(d.mac || '--')}</td>
+                <td>${escapeHtml(d.network || '--')}</td>
+                <td>${portStr}</td>
+            </tr>
+        `;
+    }
+
+    function filterDevices() {
+        const search = (document.getElementById('device-search')?.value || '').toLowerCase();
+        const tbody = document.getElementById('devices-tbody');
+        if (!window._allDevices || !tbody) return;
+
+        const filtered = search 
+            ? window._allDevices.filter(d => 
+                (d.ip || '').toLowerCase().includes(search) ||
+                (d.hostname || '').toLowerCase().includes(search) ||
+                (d.mac || '').toLowerCase().includes(search) ||
+                (d.network || '').toLowerCase().includes(search)
+            )
+            : window._allDevices;
+
+        tbody.innerHTML = filtered.length > 0 
+            ? filtered.map(d => renderDeviceRow(d)).join('')
+            : '<tr><td colspan="6" class="no-data-cell">Keine Ger\u00e4te f\u00fcr Suche gefunden</td></tr>';
     }
 
     // Expose for inline handlers
