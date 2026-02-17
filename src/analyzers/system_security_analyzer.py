@@ -19,6 +19,9 @@ class SystemSecurityFinding:
     solution: str
     details: Dict
     opnsense_path: str = ""
+    current_value: str = ""
+    recommended_value: str = ""
+    implementation_steps: list = None
 
 
 class SystemSecurityAnalyzer:
@@ -62,10 +65,18 @@ class SystemSecurityAnalyzer:
                     category="SSH",
                     check="ssh_root_login",
                     issue="SSH Root-Login aktiviert",
-                    reason="Direkter Root-Zugang ist ein Sicherheitsrisiko",
-                    solution="Deaktiviere Root-Login, nutze sudo",
-                    details={"current": "enabled"},
-                    opnsense_path="System > Settings > Administration > Secure Shell"
+                    reason="Direkter Root-Zugang über SSH ermöglicht Angreifern bei kompromittierten Credentials vollen Systemzugriff ohne Audit-Trail",
+                    solution="Root-Login deaktivieren und dedizierten Admin-User mit sudo-Rechten verwenden",
+                    details={"permitrootlogin": "1"},
+                    opnsense_path="System > Settings > Administration > Secure Shell",
+                    current_value="Root-Login: Erlaubt",
+                    recommended_value="Root-Login: Deaktiviert",
+                    implementation_steps=[
+                        "System > Settings > Administration öffnen",
+                        "Im Bereich 'Secure Shell' die Option 'Permit root user login' deaktivieren",
+                        "Sicherstellen, dass ein Admin-User mit sudo existiert",
+                        "Speichern und SSH-Verbindung mit neuem User testen"
+                    ]
                 ))
 
             password_auth = ssh_config.get("passwordauth", "0") == "1"
@@ -75,36 +86,61 @@ class SystemSecurityAnalyzer:
                     category="SSH",
                     check="ssh_password_auth",
                     issue="SSH Passwort-Authentifizierung aktiviert",
-                    reason="Key-basierte Auth ist sicherer als Passwörter",
-                    solution="Nutze SSH-Keys und deaktiviere Passwort-Auth",
-                    details={"current": "password"},
-                    opnsense_path="System > Settings > Administration > Secure Shell"
+                    reason="Passwörter sind anfällig für Brute-Force-Angriffe. Key-basierte Authentifizierung ist deutlich sicherer",
+                    solution="SSH-Keys einrichten und Passwort-Authentifizierung deaktivieren",
+                    details={"passwordauth": "1"},
+                    opnsense_path="System > Settings > Administration > Secure Shell",
+                    current_value="Passwort-Auth: Aktiviert",
+                    recommended_value="Passwort-Auth: Deaktiviert (nur SSH-Keys)",
+                    implementation_steps=[
+                        "SSH-Key-Paar generieren: ssh-keygen -t ed25519",
+                        "Public Key unter System > Access > Users > [User] > Authorized keys einfügen",
+                        "SSH-Verbindung mit Key testen",
+                        "Erst dann: System > Settings > Administration > 'Permit password login' deaktivieren"
+                    ]
                 ))
 
             ssh_port = ssh_config.get("port", "22")
-            if ssh_port == "22":
+            if str(ssh_port) == "22":
                 findings.append(SystemSecurityFinding(
                     severity="LOW",
                     category="SSH",
                     check="ssh_default_port",
                     issue="SSH auf Standard-Port 22",
-                    reason="Nicht-Standard-Port reduziert automatisierte Angriffe",
-                    solution="Port auf z.B. 2222 ändern",
-                    details={"current_port": 22},
-                    opnsense_path="System > Settings > Administration > Secure Shell"
+                    reason="Port 22 wird von automatisierten Scannern und Bots gezielt angegriffen. Ein geänderter Port reduziert Rauschen in den Logs erheblich",
+                    solution="SSH-Port auf nicht-standardisierten Port ändern (z.B. 2222, 8022)",
+                    details={"port": ssh_port},
+                    opnsense_path="System > Settings > Administration > Secure Shell",
+                    current_value=f"SSH-Port: {ssh_port}",
+                    recommended_value="SSH-Port: 2222 oder anderer nicht-standard Port",
+                    implementation_steps=[
+                        "System > Settings > Administration öffnen",
+                        "Im Bereich 'Secure Shell' den Port auf z.B. 2222 ändern",
+                        "Firewall-Regel für neuen Port anpassen",
+                        "Speichern und mit ssh -p 2222 user@firewall testen"
+                    ]
                 ))
 
             ssh_interfaces = ssh_config.get("interfaces", [])
+            iface_str = str(ssh_interfaces) if ssh_interfaces else "Alle (nicht eingeschränkt)"
             if not ssh_interfaces or "wan" in str(ssh_interfaces).lower():
                 findings.append(SystemSecurityFinding(
                     severity="CRITICAL",
                     category="SSH",
                     check="ssh_wan_access",
-                    issue="SSH möglicherweise von WAN erreichbar",
-                    reason="SSH darf nie direkt aus dem Internet erreichbar sein",
-                    solution="SSH nur auf LAN/Management beschränken",
+                    issue="SSH von WAN erreichbar oder nicht auf Interface beschränkt",
+                    reason="SSH aus dem Internet erreichbar macht die Firewall zum direkten Angriffsziel für Brute-Force und Exploit-Versuche",
+                    solution="SSH ausschließlich auf LAN/Management-Interface beschränken. Für Remote-Zugriff VPN nutzen",
                     details={"interfaces": ssh_interfaces},
-                    opnsense_path="System > Settings > Administration > Secure Shell"
+                    opnsense_path="System > Settings > Administration > Secure Shell",
+                    current_value=f"Listen-Interfaces: {iface_str}",
+                    recommended_value="Listen-Interfaces: Nur LAN / Management-VLAN",
+                    implementation_steps=[
+                        "System > Settings > Administration öffnen",
+                        "Im Bereich 'Secure Shell' unter 'Listen Interfaces' nur LAN auswählen",
+                        "WAN-Interface entfernen",
+                        "Für Remote-Zugriff: VPN-Tunnel einrichten (WireGuard/OpenVPN)"
+                    ]
                 ))
 
         return findings
@@ -123,10 +159,19 @@ class SystemSecurityAnalyzer:
                 severity="CRITICAL",
                 category="Admin Interface",
                 check="webgui_https",
-                issue="Web interface not using HTTPS",
-                reason="Admin credentials can be intercepted without encryption",
-                solution="Enable HTTPS in System > Settings > Administration",
-                details={"current": protocol, "recommended": "https"}
+                issue="WebGUI verwendet kein HTTPS",
+                reason="Ohne HTTPS werden Admin-Zugangsdaten im Klartext übertragen und können im Netzwerk abgefangen werden",
+                solution="HTTPS in System > Settings > Administration aktivieren",
+                details={"protocol": protocol},
+                opnsense_path="System > Settings > Administration > Web GUI",
+                current_value=f"Protokoll: {protocol.upper()}",
+                recommended_value="Protokoll: HTTPS",
+                implementation_steps=[
+                    "System > Settings > Administration öffnen",
+                    "Protocol auf 'HTTPS' setzen",
+                    "SSL-Zertifikat prüfen (idealerweise eigenes CA-Zertifikat)",
+                    "Speichern — Achtung: URL ändert sich zu https://"
+                ]
             ))
 
         # Check HTTPS redirect
@@ -136,49 +181,88 @@ class SystemSecurityAnalyzer:
                 severity="MEDIUM",
                 category="Admin Interface",
                 check="webgui_redirect",
-                issue="HTTP to HTTPS redirect not enabled",
-                reason="Users might accidentally access admin via HTTP",
-                solution="Enable 'Redirect HTTP to HTTPS' in admin settings",
-                details={"current": "disabled", "recommended": "enabled"}
+                issue="HTTP-zu-HTTPS-Umleitung nicht aktiviert",
+                reason="Ohne Redirect können Benutzer versehentlich unverschlüsselt auf das Admin-Interface zugreifen",
+                solution="HTTP-zu-HTTPS-Redirect aktivieren",
+                details={"httpsredirect": "0"},
+                opnsense_path="System > Settings > Administration > Web GUI",
+                current_value="HTTP→HTTPS Redirect: Deaktiviert",
+                recommended_value="HTTP→HTTPS Redirect: Aktiviert",
+                implementation_steps=[
+                    "System > Settings > Administration öffnen",
+                    "'HTTP Redirect' aktivieren",
+                    "Speichern"
+                ]
             ))
 
         # Check default port
         port = webgui_config.get("port", "443")
-        if port in ["80", "443"]:
+        if str(port) in ["80", "443", ""]:
+            display_port = port if port else "443 (Standard)"
             findings.append(SystemSecurityFinding(
                 severity="LOW",
                 category="Admin Interface",
                 check="webgui_default_port",
-                issue=f"Admin interface on standard port {port}",
-                reason="Non-standard ports reduce automated attack surface",
-                solution="Consider using a non-standard port for admin interface",
-                details={"current_port": port}
+                issue=f"WebGUI auf Standard-Port {display_port}",
+                reason="Standard-Ports werden von Scannern gezielt geprüft. Ein alternativer Port reduziert die Angriffsfläche",
+                solution="WebGUI-Port auf nicht-standard Port ändern (z.B. 8443, 10443)",
+                details={"port": port},
+                opnsense_path="System > Settings > Administration > Web GUI",
+                current_value=f"WebGUI-Port: {display_port}",
+                recommended_value="WebGUI-Port: 8443 oder anderer nicht-standard Port",
+                implementation_steps=[
+                    "System > Settings > Administration öffnen",
+                    "'TCP Port' auf z.B. 8443 ändern",
+                    "Speichern — Achtung: URL ändert sich zu https://firewall:8443",
+                    "Firewall-Regel prüfen/anpassen"
+                ]
             ))
 
         # Check session timeout
-        session_timeout = int(webgui_config.get("session_timeout", "240"))
+        try:
+            session_timeout = int(webgui_config.get("session_timeout", "240") or 240)
+        except (ValueError, TypeError):
+            session_timeout = 240
         if session_timeout > 30:
             findings.append(SystemSecurityFinding(
                 severity="LOW",
                 category="Admin Interface",
                 check="webgui_session_timeout",
-                issue=f"Long session timeout ({session_timeout} minutes)",
-                reason="Long sessions increase risk of session hijacking",
-                solution="Reduce session timeout to 15-30 minutes",
-                details={"current": session_timeout, "recommended": "15-30 minutes"}
+                issue=f"Langes Session-Timeout ({session_timeout} Minuten)",
+                reason="Lange Sessions erhöhen das Risiko von Session-Hijacking bei unbeaufsichtigten Workstations",
+                solution="Session-Timeout auf 15-30 Minuten reduzieren",
+                details={"session_timeout": session_timeout},
+                opnsense_path="System > Settings > Administration > Web GUI",
+                current_value=f"Session-Timeout: {session_timeout} Minuten",
+                recommended_value="Session-Timeout: 15-30 Minuten",
+                implementation_steps=[
+                    "System > Settings > Administration öffnen",
+                    "'Session Timeout' auf 30 setzen (oder 15 für höhere Sicherheit)",
+                    "Speichern"
+                ]
             ))
 
         # Check if accessible from WAN
         interfaces = webgui_config.get("interfaces", [])
+        iface_str = str(interfaces) if interfaces else "Alle (nicht eingeschränkt)"
         if "wan" in str(interfaces).lower():
             findings.append(SystemSecurityFinding(
                 severity="CRITICAL",
                 category="Admin Interface",
                 check="webgui_wan_access",
-                issue="Admin interface accessible from WAN",
-                reason="Admin interface should never be exposed to internet",
-                solution="Remove WAN from allowed interfaces, use VPN for remote access",
-                details={"interfaces": interfaces}
+                issue="WebGUI vom WAN erreichbar",
+                reason="Das Admin-Interface aus dem Internet erreichbar zu machen ist eines der größten Sicherheitsrisiken. Angreifer können Brute-Force-Angriffe und bekannte Exploits nutzen",
+                solution="WAN aus Listen-Interfaces entfernen und VPN für Remote-Zugriff nutzen",
+                details={"interfaces": interfaces},
+                opnsense_path="System > Settings > Administration > Web GUI",
+                current_value=f"Listen-Interfaces: {iface_str}",
+                recommended_value="Listen-Interfaces: Nur LAN / Management-VLAN",
+                implementation_steps=[
+                    "System > Settings > Administration öffnen",
+                    "Unter 'Listen Interfaces' nur LAN/Management auswählen",
+                    "WAN entfernen",
+                    "VPN-Zugang für Remote-Administration einrichten"
+                ]
             ))
 
         # Check HSTS
@@ -188,10 +272,18 @@ class SystemSecurityAnalyzer:
                 severity="MEDIUM",
                 category="Admin Interface",
                 check="webgui_hsts",
-                issue="HTTP Strict Transport Security (HSTS) not enabled",
-                reason="HSTS prevents protocol downgrade attacks",
-                solution="Enable HSTS in System > Settings > Administration",
-                details={"current": "disabled", "recommended": "enabled"}
+                issue="HTTP Strict Transport Security (HSTS) nicht aktiviert",
+                reason="Ohne HSTS können Protocol-Downgrade-Angriffe (SSL-Stripping) die HTTPS-Verschlüsselung umgehen",
+                solution="HSTS in den WebGUI-Einstellungen aktivieren",
+                details={"hsts": "0"},
+                opnsense_path="System > Settings > Administration > Web GUI",
+                current_value="HSTS: Deaktiviert",
+                recommended_value="HSTS: Aktiviert",
+                implementation_steps=[
+                    "System > Settings > Administration öffnen",
+                    "'HTTP Strict Transport Security' aktivieren",
+                    "Speichern"
+                ]
             ))
 
         return findings
@@ -200,7 +292,6 @@ class SystemSecurityAnalyzer:
         """Analyze Intrusion Detection System configuration"""
         findings = []
 
-        # Check if IDS is enabled
         ids_enabled = ids_config.get("enabled", "0") == "1"
 
         if not ids_enabled:
@@ -208,36 +299,63 @@ class SystemSecurityAnalyzer:
                 severity="MEDIUM",
                 category="IDS/IPS",
                 check="ids_enabled",
-                issue="Intrusion Detection System is not enabled",
-                reason="IDS provides additional layer of security by detecting attacks",
-                solution="Enable Suricata IDS in Services > Intrusion Detection",
-                details={"current": "disabled", "recommended": "enabled"}
+                issue="Intrusion Detection System (Suricata) nicht aktiviert",
+                reason="Ohne IDS/IPS werden Angriffe wie Port-Scans, Exploit-Versuche und bekannte Malware-Kommunikation nicht erkannt",
+                solution="Suricata IDS unter Services > Intrusion Detection aktivieren",
+                details={"enabled": "0"},
+                opnsense_path="Services > Intrusion Detection > Administration",
+                current_value="IDS/IPS: Deaktiviert",
+                recommended_value="IDS/IPS: Aktiviert (IPS-Modus)",
+                implementation_steps=[
+                    "Services > Intrusion Detection > Administration öffnen",
+                    "'Enabled' aktivieren",
+                    "'IPS mode' aktivieren für aktive Blockierung",
+                    "Unter 'Download' Rulesets aktivieren (ET Open, Abuse.ch, Feodo)",
+                    "'Schedule' für automatische Updates konfigurieren",
+                    "Interfaces auswählen (mindestens WAN)",
+                    "Speichern und Apply"
+                ]
             ))
         else:
-            # Check IDS mode (IDS vs IPS)
             ips_mode = ids_config.get("ips_mode", "0") == "1"
             if not ips_mode:
                 findings.append(SystemSecurityFinding(
                     severity="LOW",
                     category="IDS/IPS",
                     check="ids_ips_mode",
-                    issue="IDS running in detection mode only",
-                    reason="IPS mode can actively block detected threats",
-                    solution="Consider enabling IPS mode for active blocking",
-                    details={"current": "IDS", "recommended": "IPS"}
+                    issue="Suricata läuft nur im Erkennungsmodus (IDS)",
+                    reason="Im IDS-Modus werden Bedrohungen nur protokolliert, aber nicht aktiv blockiert",
+                    solution="IPS-Modus aktivieren für aktive Blockierung erkannter Angriffe",
+                    details={"ips_mode": "0"},
+                    opnsense_path="Services > Intrusion Detection > Administration",
+                    current_value="Modus: IDS (nur Erkennung)",
+                    recommended_value="Modus: IPS (Erkennung + Blockierung)",
+                    implementation_steps=[
+                        "Services > Intrusion Detection > Administration öffnen",
+                        "'IPS mode' aktivieren",
+                        "Speichern und Apply"
+                    ]
                 ))
 
-            # Check if rules are updated
-            rule_update = ids_config.get("auto_update", "0") == "1"
-            if not rule_update:
+            auto_update = ids_config.get("auto_update", "0")
+            has_auto_update = auto_update not in ("0", "", None)
+            if not has_auto_update:
                 findings.append(SystemSecurityFinding(
                     severity="MEDIUM",
                     category="IDS/IPS",
                     check="ids_rule_updates",
-                    issue="Automatic rule updates not enabled",
-                    reason="Outdated rules may miss new threats",
-                    solution="Enable automatic rule updates in IDS settings",
-                    details={"current": "manual", "recommended": "automatic"}
+                    issue="Automatische Regel-Updates nicht konfiguriert",
+                    reason="Veraltete IDS-Regeln erkennen neue Bedrohungen und aktuelle Malware-Signaturen nicht",
+                    solution="Automatischen Update-Schedule für IDS-Regeln einrichten",
+                    details={"auto_update": str(auto_update)},
+                    opnsense_path="Services > Intrusion Detection > Administration",
+                    current_value="Regel-Updates: Manuell",
+                    recommended_value="Regel-Updates: Automatisch (täglich)",
+                    implementation_steps=[
+                        "Services > Intrusion Detection > Administration öffnen",
+                        "Unter 'Schedule' einen Cron-Job für tägliche Updates einrichten",
+                        "Speichern und Apply"
+                    ]
                 ))
 
         return findings
@@ -246,30 +364,48 @@ class SystemSecurityAnalyzer:
         """Analyze firmware/update configuration"""
         findings = []
 
-        # Check for pending updates
+        current_version = firmware_config.get("current_version", "Unbekannt")
         updates_available = firmware_config.get("updates_available", False)
+        last_update = firmware_config.get("last_update", "")
+
         if updates_available:
             findings.append(SystemSecurityFinding(
                 severity="HIGH",
                 category="Updates",
                 check="firmware_updates_pending",
-                issue="Firmware updates are available",
-                reason="Security patches may be pending installation",
-                solution="Apply updates via System > Firmware > Updates",
-                details={"updates_available": True}
+                issue="Firmware-Updates verfügbar",
+                reason="Ausstehende Updates können kritische Sicherheitspatches enthalten. Ungepatchte Systeme sind anfällig für bekannte Exploits",
+                solution="Updates zeitnah über System > Firmware > Updates einspielen",
+                details={"updates_available": True, "version": current_version},
+                opnsense_path="System > Firmware > Updates",
+                current_value=f"Version: {current_version} — Updates verfügbar!",
+                recommended_value="Immer auf dem neuesten Stand",
+                implementation_steps=[
+                    "System > Firmware > Updates öffnen",
+                    "'Check for updates' klicken",
+                    "Changelog prüfen",
+                    "Backup vor Update erstellen (System > Configuration > Backups)",
+                    "'Update' klicken und Reboot abwarten"
+                ]
             ))
 
-        # Check last update
-        last_update = firmware_config.get("last_update", "")
         if not last_update:
             findings.append(SystemSecurityFinding(
                 severity="MEDIUM",
                 category="Updates",
                 check="firmware_last_update",
-                issue="Unable to determine last update date",
-                reason="Regular updates are critical for security",
-                solution="Check and apply updates regularly",
-                details={"last_update": "unknown"}
+                issue="Letztes Update-Datum nicht ermittelbar",
+                reason="Ohne regelmäßige Update-Prüfung können kritische Sicherheitslücken übersehen werden",
+                solution="Regelmäßige Update-Prüfung einrichten",
+                details={"last_update": "unknown", "version": current_version},
+                opnsense_path="System > Firmware > Updates",
+                current_value=f"Letzter Check: Unbekannt (Version: {current_version})",
+                recommended_value="Update-Check: Mindestens wöchentlich",
+                implementation_steps=[
+                    "System > Firmware > Updates öffnen",
+                    "'Check for updates' klicken",
+                    "Wöchentlichen Cron-Job einrichten unter System > Settings > Cron"
+                ]
             ))
 
         return findings
@@ -278,30 +414,45 @@ class SystemSecurityAnalyzer:
         """Analyze general system settings"""
         findings = []
 
+        hostname = general_config.get("hostname", "")
+        domain = general_config.get("domain", "")
+
         # Check NTP configuration
         ntp_servers = general_config.get("ntp_servers", [])
+        # Filter out empty strings
+        ntp_servers = [s for s in ntp_servers if s and s.strip()]
         if not ntp_servers:
             findings.append(SystemSecurityFinding(
                 severity="LOW",
                 category="System",
                 check="ntp_configured",
-                issue="No NTP servers configured",
-                reason="Accurate time is important for logging and certificates",
-                solution="Configure NTP servers in System > Settings > General",
-                details={"ntp_servers": ntp_servers}
+                issue="Keine NTP-Server konfiguriert",
+                reason="Ohne korrekte Zeitsynchronisation sind Logs unbrauchbar, TLS-Zertifikate können fehlschlagen und Cron-Jobs laufen falsch",
+                solution="NTP-Server konfigurieren (z.B. de.pool.ntp.org)",
+                details={"ntp_servers": ntp_servers},
+                opnsense_path="System > Settings > General",
+                current_value="NTP-Server: Nicht konfiguriert",
+                recommended_value="NTP-Server: 0.de.pool.ntp.org, 1.de.pool.ntp.org",
+                implementation_steps=[
+                    "System > Settings > General öffnen",
+                    "'Time server hostname' auf z.B. '0.de.pool.ntp.org 1.de.pool.ntp.org' setzen",
+                    "Speichern"
+                ]
             ))
 
-        # Check console access
-        console_menu = general_config.get("console_menu", "1") == "1"
-        if console_menu:
+        # Check hostname/domain
+        if not hostname or hostname in ("OPNsense", "opnsense", "firewall"):
             findings.append(SystemSecurityFinding(
                 severity="LOW",
                 category="System",
-                check="console_menu",
-                issue="Console menu is enabled",
-                reason="Physical console access could be restricted for security",
-                solution="Consider disabling console menu if physical security is a concern",
-                details={"current": "enabled"}
+                check="hostname_default",
+                issue=f"Standard-Hostname in Verwendung: '{hostname or 'leer'}'",
+                reason="Ein individueller Hostname erleichtert die Identifikation im Netzwerk und in Logs",
+                solution="Eindeutigen Hostnamen vergeben",
+                details={"hostname": hostname, "domain": domain},
+                opnsense_path="System > Settings > General",
+                current_value=f"Hostname: {hostname or '(leer)'}.{domain or '(leer)'}",
+                recommended_value="Hostname: Individueller Name (z.B. fw-standort)"
             ))
 
         return findings
@@ -320,23 +471,45 @@ class SystemSecurityAnalyzer:
                 severity="MEDIUM",
                 category="Authentication",
                 check="auth_2fa",
-                issue="Two-factor authentication not enabled",
-                reason="2FA provides additional protection for admin access",
-                solution="Enable TOTP in System > Access > Users",
-                details={"current": "disabled", "recommended": "enabled"}
+                issue="Zwei-Faktor-Authentifizierung (2FA) nicht aktiviert",
+                reason="Ohne 2FA genügt ein kompromittiertes Passwort für vollen Admin-Zugriff. TOTP bietet zusätzlichen Schutz",
+                solution="TOTP-basierte 2FA für alle Admin-Benutzer aktivieren",
+                details={"totp_enabled": "0"},
+                opnsense_path="System > Access > Users",
+                current_value="2FA: Deaktiviert",
+                recommended_value="2FA: TOTP aktiviert für alle Admin-User",
+                implementation_steps=[
+                    "System > Access > Tester öffnen und TOTP-Server anlegen",
+                    "System > Access > Users > [Admin-User] bearbeiten",
+                    "'OTP seed' generieren und QR-Code mit Authenticator-App scannen",
+                    "Unter System > Settings > Administration den TOTP-Server als Auth-Backend wählen",
+                    "Testen: Ausloggen und mit Passwort + TOTP-Code einloggen"
+                ]
             ))
 
         # Check lockout policy
-        lockout_threshold = auth_config.get("lockout_threshold", 0)
+        try:
+            lockout_threshold = int(auth_config.get("lockout_threshold", 0) or 0)
+        except (ValueError, TypeError):
+            lockout_threshold = 0
         if lockout_threshold == 0 or lockout_threshold > 5:
+            threshold_display = lockout_threshold if lockout_threshold > 0 else "Kein Limit"
             findings.append(SystemSecurityFinding(
                 severity="MEDIUM",
                 category="Authentication",
                 check="auth_lockout",
-                issue="Weak or no account lockout policy",
-                reason="Lockout prevents brute force attacks",
-                solution="Configure account lockout after 3-5 failed attempts",
-                details={"current_threshold": lockout_threshold, "recommended": "3-5"}
+                issue=f"Schwache Login-Sperre (aktuell: {threshold_display})",
+                reason="Ohne Lockout-Policy können Angreifer unbegrenzt Passwörter durchprobieren (Brute-Force)",
+                solution="Account-Sperre nach 3-5 fehlgeschlagenen Versuchen konfigurieren",
+                details={"lockout_threshold": lockout_threshold},
+                opnsense_path="System > Settings > Administration",
+                current_value=f"Lockout-Threshold: {threshold_display}",
+                recommended_value="Lockout-Threshold: 3-5 Versuche",
+                implementation_steps=[
+                    "System > Settings > Administration öffnen",
+                    "'Max login attempts' auf 5 setzen",
+                    "Speichern"
+                ]
             ))
 
         return findings
@@ -437,45 +610,65 @@ class SystemSecurityAnalyzer:
         findings = []
         
         if not logging_config:
-            # No logging config means defaults
             findings.append(SystemSecurityFinding(
                 severity="MEDIUM",
                 category="Logging",
                 check="logging_not_configured",
                 issue="Logging nicht explizit konfiguriert",
-                reason="Logs sind essentiell für Security Monitoring",
-                solution="Konfiguriere Logging-Einstellungen",
+                reason="Ohne konfiguriertes Logging fehlen forensische Daten bei Sicherheitsvorfällen",
+                solution="Logging-Einstellungen konfigurieren und Remote-Syslog aktivieren",
                 details={},
-                opnsense_path="System > Settings > Logging"
+                opnsense_path="System > Settings > Logging",
+                current_value="Logging: Standard-Einstellungen (nicht konfiguriert)",
+                recommended_value="Logging: Explizit konfiguriert mit Remote-Syslog"
             ))
             return findings
         
         # Check remote syslog
         remote_syslog = logging_config.get("remote_syslog", {})
-        if not remote_syslog.get("enabled", False):
+        has_remote = remote_syslog.get("enabled", False)
+        if not has_remote:
             findings.append(SystemSecurityFinding(
                 severity="LOW",
                 category="Logging",
                 check="no_remote_syslog",
                 issue="Kein Remote-Syslog konfiguriert",
-                reason="Remote-Logging schützt Logs vor lokaler Manipulation",
-                solution="Konfiguriere Remote-Syslog-Server",
-                details={},
-                opnsense_path="System > Settings > Logging > Remote"
+                reason="Lokale Logs können bei einem Angriff manipuliert oder gelöscht werden. Remote-Logging sichert Logs auf einem separaten System",
+                solution="Remote-Syslog-Server konfigurieren (z.B. Graylog, ELK, rsyslog)",
+                details={"remote_syslog": "disabled"},
+                opnsense_path="System > Settings > Logging > Remote",
+                current_value="Remote-Syslog: Deaktiviert",
+                recommended_value="Remote-Syslog: Aktiviert (separater Log-Server)",
+                implementation_steps=[
+                    "System > Settings > Logging > Remote öffnen",
+                    "Neues Ziel anlegen (IP/Port des Syslog-Servers)",
+                    "Aktivieren und relevante Facilities wählen",
+                    "Speichern"
+                ]
             ))
         
         # Check log retention
-        preserve_logs = logging_config.get("preserve_logs", 7)
+        try:
+            preserve_logs = int(logging_config.get("preserve_logs", 7) or 7)
+        except (ValueError, TypeError):
+            preserve_logs = 7
         if preserve_logs < 30:
             findings.append(SystemSecurityFinding(
                 severity="LOW",
                 category="Logging",
                 check="short_log_retention",
-                issue=f"Log-Aufbewahrung nur {preserve_logs} Tage",
-                reason="Längere Aufbewahrung ermöglicht forensische Analyse",
-                solution="Erhöhe Log-Retention auf mindestens 30 Tage",
-                details={"current_days": preserve_logs},
-                opnsense_path="System > Settings > Logging"
+                issue=f"Kurze Log-Aufbewahrung: {preserve_logs} Tage",
+                reason="Bei Security-Incidents werden oft Logs der letzten 30+ Tage benötigt. {preserve_logs} Tage reichen für forensische Analyse nicht aus",
+                solution="Log-Retention auf mindestens 30 Tage erhöhen",
+                details={"preserve_logs": preserve_logs},
+                opnsense_path="System > Settings > Logging",
+                current_value=f"Log-Aufbewahrung: {preserve_logs} Tage",
+                recommended_value="Log-Aufbewahrung: ≥ 30 Tage",
+                implementation_steps=[
+                    "System > Settings > Logging öffnen",
+                    "'Preserve logs' auf mindestens 31 setzen",
+                    "Speichern"
+                ]
             ))
         
         # Check firewall logging
@@ -486,10 +679,17 @@ class SystemSecurityAnalyzer:
                 category="Logging",
                 check="no_default_block_logging",
                 issue="Default-Block-Regel ohne Logging",
-                reason="Blockierte Verbindungen sollten geloggt werden",
-                solution="Aktiviere Logging für Default-Block",
-                details={},
-                opnsense_path="Firewall > Settings > Advanced"
+                reason="Ohne Logging der Default-Block-Regel bleiben geblockte Angriffsversuche und Port-Scans unsichtbar",
+                solution="Logging für die Default-Block-Regel aktivieren",
+                details={"log_default_block": False},
+                opnsense_path="Firewall > Settings > Advanced",
+                current_value="Log Default-Block: Deaktiviert",
+                recommended_value="Log Default-Block: Aktiviert",
+                implementation_steps=[
+                    "Firewall > Settings > Advanced öffnen",
+                    "'Log packets matched from the default block rule' aktivieren",
+                    "Speichern und Apply"
+                ]
             ))
         
         return findings
@@ -498,31 +698,46 @@ class SystemSecurityAnalyzer:
         """Analyze backup and cron configuration"""
         findings = []
         
-        # Check for config backup
         backup = cron_config.get("backup", {})
-        if not backup.get("enabled", False):
+        has_backup = backup.get("enabled", False)
+        if not has_backup:
             findings.append(SystemSecurityFinding(
                 severity="HIGH",
                 category="Backup",
                 check="no_auto_backup",
                 issue="Kein automatisches Config-Backup konfiguriert",
-                reason="Ohne Backup kann Config-Verlust zum Problem werden",
-                solution="Konfiguriere automatisches Backup",
-                details={},
-                opnsense_path="System > Configuration > Backups"
+                reason="Ohne automatisches Backup geht bei Hardware-Ausfall, fehlgeschlagenen Updates oder Fehlkonfiguration die gesamte Konfiguration verloren",
+                solution="Automatisches Config-Backup einrichten (lokal + Google Drive/Nextcloud)",
+                details={"backup_enabled": False},
+                opnsense_path="System > Configuration > Backups",
+                current_value="Automatisches Backup: Nicht konfiguriert",
+                recommended_value="Automatisches Backup: Aktiviert (täglich)",
+                implementation_steps=[
+                    "System > Configuration > Backups öffnen",
+                    "Google Drive oder Nextcloud-Backup einrichten",
+                    "Alternativ: Cron-Job unter System > Settings > Cron anlegen",
+                    "Backup-Verschlüsselung aktivieren"
+                ]
             ))
         
-        # Check backup encryption
-        if backup.get("enabled", False) and not backup.get("encrypted", False):
+        if has_backup and not backup.get("encrypted", False):
             findings.append(SystemSecurityFinding(
                 severity="MEDIUM",
                 category="Backup",
                 check="backup_not_encrypted",
                 issue="Config-Backup nicht verschlüsselt",
-                reason="Backup enthält sensible Daten wie Passwörter",
-                solution="Aktiviere Backup-Verschlüsselung",
-                details={},
-                opnsense_path="System > Configuration > Backups"
+                reason="Unverschlüsselte Backups enthalten Passwörter, API-Keys und VPN-Zertifikate im Klartext",
+                solution="Backup-Verschlüsselung aktivieren",
+                details={"encrypted": False},
+                opnsense_path="System > Configuration > Backups",
+                current_value="Backup-Verschlüsselung: Deaktiviert",
+                recommended_value="Backup-Verschlüsselung: Aktiviert",
+                implementation_steps=[
+                    "System > Configuration > Backups öffnen",
+                    "'Encrypt configuration backups' aktivieren",
+                    "Sicheres Passwort vergeben und separat aufbewahren",
+                    "Speichern"
+                ]
             ))
         
         return findings
@@ -534,31 +749,44 @@ class SystemSecurityAnalyzer:
         if not cp_config or not cp_config.get("enabled", False):
             return findings
         
-        # Check HTTPS
-        if not cp_config.get("https", False):
+        has_https = cp_config.get("https", False)
+        if not has_https:
             findings.append(SystemSecurityFinding(
                 severity="HIGH",
                 category="Captive Portal",
                 check="cp_no_https",
                 issue="Captive Portal ohne HTTPS",
-                reason="Login-Daten werden unverschlüsselt übertragen",
-                solution="Aktiviere HTTPS für Captive Portal",
-                details={},
-                opnsense_path="Services > Captive Portal"
+                reason="Login-Daten werden unverschlüsselt über WLAN/LAN übertragen und können leicht abgefangen werden",
+                solution="HTTPS für das Captive Portal aktivieren",
+                details={"https": False},
+                opnsense_path="Services > Captive Portal",
+                current_value="Captive Portal HTTPS: Deaktiviert",
+                recommended_value="Captive Portal HTTPS: Aktiviert",
+                implementation_steps=[
+                    "Services > Captive Portal öffnen",
+                    "Zone bearbeiten",
+                    "SSL-Zertifikat zuweisen",
+                    "Speichern"
+                ]
             ))
         
-        # Check session timeout
-        timeout = cp_config.get("timeout", 0)
+        try:
+            timeout = int(cp_config.get("timeout", 0) or 0)
+        except (ValueError, TypeError):
+            timeout = 0
         if timeout == 0 or timeout > 480:
+            timeout_display = f"{timeout} Minuten" if timeout > 0 else "Unbegrenzt"
             findings.append(SystemSecurityFinding(
                 severity="LOW",
                 category="Captive Portal",
                 check="cp_long_timeout",
-                issue="Captive Portal Session-Timeout zu lang oder unbegrenzt",
-                reason="Lange Sessions erhöhen Missbrauchsrisiko",
-                solution="Setze angemessenes Timeout (z.B. 4 Stunden)",
+                issue=f"Captive Portal Session-Timeout: {timeout_display}",
+                reason="Zu lange oder unbegrenzte Sessions ermöglichen Missbrauch durch nicht-autorisierte Geräte",
+                solution="Session-Timeout auf 4-8 Stunden setzen",
                 details={"timeout": timeout},
-                opnsense_path="Services > Captive Portal"
+                opnsense_path="Services > Captive Portal",
+                current_value=f"Session-Timeout: {timeout_display}",
+                recommended_value="Session-Timeout: 240-480 Minuten"
             ))
         
         return findings

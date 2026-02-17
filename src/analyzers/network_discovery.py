@@ -4,6 +4,7 @@ Discovers and maps all devices in the network
 """
 import logging
 import nmap
+import socket
 from typing import Dict, List, Set
 from dataclasses import dataclass
 from collections import defaultdict
@@ -35,18 +36,41 @@ class NetworkDiscovery:
         self.scan_options = scan_options
         self.nm = nmap.PortScanner()
 
+    @staticmethod
+    def _is_private_ip(ip_str: str) -> bool:
+        """Check if an IP address is private (RFC1918/RFC4193)"""
+        try:
+            ip = ipaddress.ip_address(ip_str)
+            return ip.is_private and not ip.is_loopback and not ip.is_link_local
+        except (ValueError, TypeError):
+            return False
+
+    @staticmethod
+    def _resolve_hostname(ip_str: str, timeout: float = 1.0) -> str:
+        """Resolve hostname via reverse DNS lookup"""
+        try:
+            old_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(timeout)
+            try:
+                hostname, _, _ = socket.gethostbyaddr(ip_str)
+                return hostname
+            finally:
+                socket.setdefaulttimeout(old_timeout)
+        except (socket.herror, socket.gaierror, socket.timeout, OSError):
+            return ""
+
     def discover_network(self, networks: List[str], dhcp_leases: List[Dict],
                         arp_table: List[Dict], vlans: List[Dict]) -> List[NetworkDevice]:
-        """Discover all devices in specified networks"""
+        """Discover all devices in specified networks (private IPs only)"""
         devices = []
 
         # Combine data from different sources
         device_map = defaultdict(dict)
 
-        # Add data from DHCP leases
+        # Add data from DHCP leases (only private IPs)
         for lease in dhcp_leases:
-            ip = lease.get("address")
-            if ip:
+            ip = lease.get("address", lease.get("ip", ""))
+            if ip and self._is_private_ip(ip):
                 device_map[ip].update({
                     "ip": ip,
                     "mac": lease.get("mac", ""),
@@ -54,10 +78,10 @@ class NetworkDiscovery:
                     "status": "active" if lease.get("state") == "active" else "inactive"
                 })
 
-        # Add data from ARP table
+        # Add data from ARP table (only private IPs)
         for arp_entry in arp_table:
-            ip = arp_entry.get("ip")
-            if ip:
+            ip = arp_entry.get("ip", "")
+            if ip and self._is_private_ip(ip):
                 if ip not in device_map:
                     device_map[ip] = {"ip": ip}
                 device_map[ip].update({
@@ -78,18 +102,25 @@ class NetworkDiscovery:
                 else:
                     device_map[ip].update(device_info)
 
-        # Assign VLANs to devices
+        # Assign VLANs and resolve hostnames for devices
         for ip, device_info in device_map.items():
             vlan = self._determine_vlan(ip, vlans)
             device_info["vlan"] = vlan
             device_info["network"] = self._determine_network(ip, networks)
+
+            # Resolve hostname if not already known
+            current_hostname = device_info.get("hostname", "")
+            if not current_hostname or current_hostname in ("Unknown", "", "--"):
+                resolved = self._resolve_hostname(ip)
+                if resolved:
+                    device_info["hostname"] = resolved
 
         # Convert to NetworkDevice objects
         for ip, info in device_map.items():
             device = NetworkDevice(
                 ip=info.get("ip", ip),
                 mac=info.get("mac", "Unknown"),
-                hostname=info.get("hostname", "Unknown"),
+                hostname=info.get("hostname", "") or "Unknown",
                 vendor=info.get("vendor", "Unknown"),
                 network=info.get("network", "Unknown"),
                 vlan=info.get("vlan", "Unknown"),
@@ -104,7 +135,7 @@ class NetworkDiscovery:
         return devices
 
     def _scan_network(self, network: str) -> List[Dict]:
-        """Scan network for devices"""
+        """Scan network for devices (only private IPs)"""
         devices = []
 
         try:
@@ -118,10 +149,20 @@ class NetworkDiscovery:
             self.nm.scan(hosts=network, arguments=scan_args)
 
             for host in self.nm.all_hosts():
+                # Skip non-private IPs (public/ISP addresses)
+                if not self._is_private_ip(host):
+                    logger.debug(f"Skipping public IP {host}")
+                    continue
+
+                nmap_hostname = self._get_hostname(host)
+                # Try reverse DNS if nmap didn't resolve
+                if not nmap_hostname or nmap_hostname == "Unknown":
+                    nmap_hostname = self._resolve_hostname(host) or "Unknown"
+
                 device_info = {
                     "ip": host,
                     "status": self.nm[host].state(),
-                    "hostname": self._get_hostname(host),
+                    "hostname": nmap_hostname,
                     "mac": self._get_mac(host),
                     "vendor": self._get_vendor(host),
                     "os_guess": self._get_os_guess(host),

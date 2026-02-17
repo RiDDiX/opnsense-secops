@@ -7,7 +7,7 @@ import json
 import logging
 from flask import Flask, render_template, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
-from datetime import datetime
+from datetime import datetime, timedelta
 import sys
 
 from src.config_loader import ConfigLoader
@@ -479,6 +479,162 @@ def download_html_report(filename):
         )
     except Exception as e:
         logger.error(f"Failed to generate HTML report: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/reports/clear', methods=['POST'])
+def clear_scan_history():
+    """Delete all scan reports to start fresh"""
+    try:
+        deleted = 0
+        if os.path.exists(REPORTS_DIR):
+            for filename in os.listdir(REPORTS_DIR):
+                filepath = os.path.join(REPORTS_DIR, filename)
+                if os.path.isfile(filepath) and filename.startswith('security_audit_'):
+                    os.remove(filepath)
+                    deleted += 1
+        
+        logger.info(f"Cleared {deleted} report files")
+        return jsonify({
+            'success': True,
+            'message': f'{deleted} Reports gelöscht',
+            'deleted': deleted
+        })
+    except Exception as e:
+        logger.error(f"Failed to clear reports: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# === Scan Schedule ===
+_schedule_file = os.path.join(CONFIG_DIR, 'schedule.json')
+_schedule_timer = None
+
+def _load_schedule():
+    """Load schedule config from file"""
+    if os.path.exists(_schedule_file):
+        with open(_schedule_file, 'r') as f:
+            return json.load(f)
+    return {'enabled': False, 'interval_hours': 24, 'next_run': None}
+
+def _save_schedule(schedule):
+    """Save schedule config to file"""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(_schedule_file, 'w') as f:
+        json.dump(schedule, f)
+
+def _run_scheduled_scan():
+    """Execute a scheduled scan (same flow as manual scan)"""
+    global scan_manager, _schedule_timer
+    schedule = _load_schedule()
+    if not schedule.get('enabled', False):
+        return
+    
+    if scan_manager.status not in ('running', 'cancelling'):
+        logger.info("Starting scheduled scan...")
+        
+        def run_scan():
+            global scan_manager
+            try:
+                scan_manager.start()
+                
+                scan_manager.update('Validating configuration...', 1)
+                auditor = SecurityAuditor()
+                if not auditor.validate_configuration():
+                    scan_manager.fail('Configuration validation failed')
+                    return
+                
+                scan_manager.update('Connecting to OPNsense...', 2)
+                if not auditor.initialize_client():
+                    scan_manager.fail('Failed to connect to OPNsense')
+                    return
+                
+                scan_manager.update('Initializing analyzers...', 3)
+                auditor.initialize_analyzers()
+                auditor.scan_manager = scan_manager
+                
+                results = auditor.run_audit()
+                
+                if scan_manager.is_cancelled():
+                    scan_manager.status = 'cancelled'
+                    return
+                
+                scan_manager.update('Generating reports...', 8)
+                auditor.report_generator.generate_reports(results, REPORTS_DIR)
+                scan_manager.complete()
+                
+            except Exception as e:
+                logger.error(f"Scheduled scan failed: {e}", exc_info=True)
+                scan_manager.fail(str(e))
+        
+        thread = threading.Thread(target=run_scan)
+        thread.daemon = True
+        thread.start()
+    
+    # Schedule next run
+    _schedule_next_run()
+
+def _schedule_next_run():
+    """Schedule the next scan based on interval"""
+    global _schedule_timer
+    schedule = _load_schedule()
+    if not schedule.get('enabled', False):
+        if _schedule_timer:
+            _schedule_timer.cancel()
+            _schedule_timer = None
+        return
+    
+    interval = max(1, schedule.get('interval_hours', 24)) * 3600
+    next_run = (datetime.now() + timedelta(seconds=interval)).isoformat()
+    schedule['next_run'] = next_run
+    _save_schedule(schedule)
+    
+    if _schedule_timer:
+        _schedule_timer.cancel()
+    _schedule_timer = threading.Timer(interval, _run_scheduled_scan)
+    _schedule_timer.daemon = True
+    _schedule_timer.start()
+    logger.info(f"Next scheduled scan in {schedule.get('interval_hours', 24)}h at {next_run}")
+
+
+@app.route('/api/schedule', methods=['GET'])
+def get_schedule():
+    """Get current scan schedule"""
+    schedule = _load_schedule()
+    return jsonify({'success': True, 'schedule': schedule})
+
+
+@app.route('/api/schedule', methods=['POST'])
+def set_schedule():
+    """Set scan schedule"""
+    try:
+        data = request.json
+        schedule = _load_schedule()
+        schedule['enabled'] = data.get('enabled', False)
+        schedule['interval_hours'] = max(1, int(data.get('interval_hours', 24)))
+        
+        if schedule['enabled']:
+            interval = schedule['interval_hours'] * 3600
+            schedule['next_run'] = (datetime.now() + timedelta(seconds=interval)).isoformat()
+        else:
+            schedule['next_run'] = None
+        
+        _save_schedule(schedule)
+        
+        if schedule['enabled']:
+            _schedule_next_run()
+        else:
+            global _schedule_timer
+            if _schedule_timer:
+                _schedule_timer.cancel()
+                _schedule_timer = None
+        
+        return jsonify({
+            'success': True,
+            'message': f"Schedule {'aktiviert' if schedule['enabled'] else 'deaktiviert'}",
+            'schedule': schedule
+        })
+    except Exception as e:
+        logger.error(f"Failed to set schedule: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1268,6 +1424,16 @@ def start_internal_scan():
                                     device['hostname'] = h['name']
                                     break
                         
+                        # Reverse DNS fallback
+                        if not device['hostname']:
+                            try:
+                                import socket
+                                resolved, _, _ = socket.gethostbyaddr(host_ip)
+                                if resolved:
+                                    device['hostname'] = resolved
+                            except (socket.herror, socket.gaierror, OSError):
+                                pass
+                        
                         # Get MAC from scan if not known
                         if not device['mac'] and 'addresses' in nm[host_ip]:
                             device['mac'] = nm[host_ip]['addresses'].get('mac', '')
@@ -1481,6 +1647,9 @@ def get_raw_data():
 if __name__ == '__main__':
     # Create necessary directories
     os.makedirs(REPORTS_DIR, exist_ok=True)
+
+    # Resume schedule if previously enabled
+    _schedule_next_run()
 
     # Run Flask app
     app.run(host='0.0.0.0', port=5000, debug=False)

@@ -1084,4 +1084,95 @@ body {
     align-items: center;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   TOAST NOTIFICATIONS
+═══════════════════════════════════════════════════════════════ */
+.toast-notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    transform: translateX(120%);
+    transition: transform 0.3s ease;
+    max-width: 400px;
+}
+.toast-notification.show { transform: translateX(0); }
+.toast-success { border-left: 4px solid var(--success); }
+.toast-error { border-left: 4px solid var(--danger); }
+.toast-info { border-left: 4px solid var(--accent); }
+.toast-icon { font-size: 1.2rem; }
+.toast-success .toast-icon { color: var(--success); }
+.toast-error .toast-icon { color: var(--danger); }
+.toast-info .toast-icon { color: var(--accent); }
+.toast-title { font-weight: 600; font-size: 0.9rem; }
+.toast-message { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+.toast-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    margin-left: auto;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FINDING DETAIL COMPARISON
+═══════════════════════════════════════════════════════════════ */
+.detail-comparison {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.compare-box {
+    padding: 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+}
+.compare-box.current {
+    background: rgba(255,107,107,0.08);
+    border-color: rgba(255,107,107,0.3);
+}
+.compare-box.recommended {
+    background: rgba(105,219,124,0.08);
+    border-color: rgba(105,219,124,0.3);
+}
+.compare-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+.compare-box.current .compare-label { color: #ff6b6b; }
+.compare-box.recommended .compare-label { color: #69db7c; }
+.compare-value {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    word-break: break-word;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TOGGLE + SCHEDULE
+═══════════════════════════════════════════════════════════════ */
+.toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+}
+.toggle-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+}
+
 .hidden { display: none !important; }

@@ -16,8 +16,10 @@
         results: '/api/results/latest',
         rawData: '/api/data/raw',
         history: '/api/reports/history',
+        clearHistory: '/api/reports/clear',
         ignoreFinding: '/api/ignore-list/add-finding',
-        internalScan: '/api/scan/internal/status'
+        internalScan: '/api/scan/internal/status',
+        schedule: '/api/schedule'
     };
 
     let state = {
@@ -28,7 +30,8 @@
         scanStartTime: null,
         lastLogIndex: 0,
         currentFinding: null,
-        reportFile: null
+        reportFile: null,
+        lastScanStatus: null
     };
 
     // Initialize
@@ -40,6 +43,7 @@
         loadConfig();
         loadLatestResults();
         checkScanStatus();
+        loadSchedule();
     }
 
     // Navigation
@@ -110,6 +114,14 @@
         // Device search
         const deviceSearch = document.getElementById('device-search');
         if (deviceSearch) deviceSearch.addEventListener('input', filterDevices);
+
+        // Clear history
+        const btnClear = document.getElementById('btn-clear-history');
+        if (btnClear) btnClear.addEventListener('click', clearHistory);
+
+        // Schedule
+        const btnSchedule = document.getElementById('btn-save-schedule');
+        if (btnSchedule) btnSchedule.addEventListener('click', saveSchedule);
     }
 
     // Config Management
@@ -278,6 +290,7 @@
                 stopScanPolling();
                 state.scanning = false;
                 addScanLog('success', 'Scan abgeschlossen!');
+                showNotification('Scan abgeschlossen', 'Security-Scan wurde erfolgreich beendet.', 'success');
                 setTimeout(() => {
                     hideScanPanel();
                     loadLatestResults();
@@ -286,6 +299,7 @@
                 stopScanPolling();
                 state.scanning = false;
                 addScanLog('error', data.error || 'Scan abgebrochen');
+                showNotification('Scan fehlgeschlagen', data.error || 'Scan wurde abgebrochen.', 'error');
                 setTimeout(hideScanPanel, 2000);
             }
         } catch (err) {
@@ -565,6 +579,23 @@
             ${finding.opnsense_path ? `
                 <div class="detail-path">
                     <i class="fas fa-directions"></i> ${escapeHtml(finding.opnsense_path)}
+                </div>
+            ` : ''}
+
+            ${(finding.current_value || finding.recommended_value) ? `
+                <div class="detail-comparison">
+                    ${finding.current_value ? `
+                        <div class="compare-box current">
+                            <div class="compare-label"><i class="fas fa-times-circle"></i> Aktueller Wert</div>
+                            <div class="compare-value">${escapeHtml(finding.current_value)}</div>
+                        </div>
+                    ` : ''}
+                    ${finding.recommended_value ? `
+                        <div class="compare-box recommended">
+                            <div class="compare-label"><i class="fas fa-check-circle"></i> Empfohlen</div>
+                            <div class="compare-value">${escapeHtml(finding.recommended_value)}</div>
+                        </div>
+                    ` : ''}
                 </div>
             ` : ''}
             
@@ -976,6 +1007,96 @@
         tbody.innerHTML = filtered.length > 0 
             ? filtered.map(d => renderDeviceRow(d)).join('')
             : '<tr><td colspan="6" class="no-data-cell">Keine Ger\u00e4te f\u00fcr Suche gefunden</td></tr>';
+    }
+
+    // === Notifications ===
+    function showNotification(title, message, type = 'info') {
+        // Remove existing notification
+        const existing = document.querySelector('.toast-notification');
+        if (existing) existing.remove();
+
+        const toast = document.createElement('div');
+        toast.className = `toast-notification toast-${type}`;
+        const icon = type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle';
+        toast.innerHTML = `
+            <div class="toast-icon"><i class="fas fa-${icon}"></i></div>
+            <div class="toast-content">
+                <div class="toast-title">${escapeHtml(title)}</div>
+                <div class="toast-message">${escapeHtml(message)}</div>
+            </div>
+            <button class="toast-close" onclick="this.parentElement.remove()"><i class="fas fa-times"></i></button>
+        `;
+        document.body.appendChild(toast);
+        // Trigger animation
+        requestAnimationFrame(() => toast.classList.add('show'));
+        setTimeout(() => { if (toast.parentElement) toast.remove(); }, 6000);
+    }
+
+    // === Clear History ===
+    async function clearHistory() {
+        if (!confirm('Alle Scan-Reports wirklich löschen? Dies kann nicht rückgängig gemacht werden.')) return;
+        try {
+            const res = await fetch(API.clearHistory, { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                showNotification('Verlauf gelöscht', data.message, 'success');
+                loadLatestResults();
+                loadScanHistory();
+            } else {
+                showNotification('Fehler', data.error || 'Löschen fehlgeschlagen', 'error');
+            }
+        } catch (err) {
+            console.error('Clear history failed:', err);
+        }
+    }
+
+    // === Schedule ===
+    async function loadSchedule() {
+        try {
+            const res = await fetch(API.schedule);
+            const data = await res.json();
+            if (data.success && data.schedule) {
+                const s = data.schedule;
+                const toggle = document.getElementById('schedule-enabled');
+                const interval = document.getElementById('schedule-interval');
+                const nextRun = document.getElementById('schedule-next-run');
+                if (toggle) toggle.checked = s.enabled || false;
+                if (interval) interval.value = s.interval_hours || 24;
+                if (nextRun) {
+                    nextRun.textContent = s.enabled && s.next_run 
+                        ? new Date(s.next_run).toLocaleString('de-DE') 
+                        : 'Nicht geplant';
+                }
+            }
+        } catch (err) {
+            console.error('Load schedule failed:', err);
+        }
+    }
+
+    async function saveSchedule() {
+        const toggle = document.getElementById('schedule-enabled');
+        const interval = document.getElementById('schedule-interval');
+        if (!toggle || !interval) return;
+
+        try {
+            const res = await fetch(API.schedule, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: toggle.checked,
+                    interval_hours: parseInt(interval.value) || 24
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showNotification('Schedule gespeichert', data.message, 'success');
+                loadSchedule();
+            } else {
+                showNotification('Fehler', data.error, 'error');
+            }
+        } catch (err) {
+            console.error('Save schedule failed:', err);
+        }
     }
 
     // Expose for inline handlers
