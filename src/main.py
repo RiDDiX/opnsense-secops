@@ -267,69 +267,95 @@ class SecurityAuditor:
         }
 
         # Step 4: Collect data from OPNsense
-        if not self._update_progress('Collecting data from OPNsense...', 4):
+        if not self._update_progress('Daten von OPNsense abrufen...', 4):
             return results
         
-        self._log('info', 'Connecting to OPNsense API...')
+        self._log('info', f'Verbinde zu OPNsense API ({self.opnsense_host})...')
+        
+        self._log('check', 'Lade Firewall-Regeln...')
         firewall_rules = self.client.get_firewall_rules()
-        self._log('info', f'Retrieved {len(firewall_rules)} firewall rules')
+        self._log('success', f'{len(firewall_rules)} Firewall-Regeln geladen')
+        results["statistics"]["firewall_rules"] = len(firewall_rules)
         
+        self._log('check', 'Lade NAT-Regeln...')
         nat_rules = self.client.get_nat_rules()
-        self._log('info', f'Retrieved {len(nat_rules)} NAT rules')
+        self._log('success', f'{len(nat_rules)} NAT-Regeln geladen')
+        results["statistics"]["nat_rules"] = len(nat_rules)
         
+        self._log('check', 'Lade VLAN-Konfiguration...')
         vlans = self.client.get_vlans()
-        self._log('info', f'Retrieved {len(vlans)} VLANs')
+        self._log('success', f'{len(vlans)} VLANs geladen')
         
+        self._log('check', 'Lade Interface-Konfiguration...')
         interfaces = self.client.get_interfaces()
-        self._log('info', f'Retrieved {len(interfaces)} interfaces')
+        self._log('success', f'{len(interfaces)} Interfaces geladen')
+        results["statistics"]["interfaces"] = len(interfaces)
         
+        self._log('check', 'Lade DNS-Konfiguration (Unbound/Dnsmasq)...')
         dns_config = self.client.get_dns_config()
-        self._log('info', 'Retrieved DNS configuration')
+        results["dns_config"] = dns_config
+        unbound_status = "aktiv" if dns_config.get("unbound", {}).get("enabled") == "1" else "inaktiv"
+        self._log('success', f'DNS-Konfiguration geladen (Unbound: {unbound_status})')
         
+        self._log('check', 'Lade DHCP-Leases...')
         dhcp_leases = self.client.get_dhcp_leases()
-        self._log('info', f'Retrieved {len(dhcp_leases)} DHCP leases')
+        self._log('success', f'{len(dhcp_leases)} DHCP-Leases geladen')
         
+        self._log('check', 'Lade ARP-Tabelle...')
         arp_table = self.client.get_arp_table()
-        self._log('info', f'Retrieved {len(arp_table)} ARP entries')
+        self._log('success', f'{len(arp_table)} ARP-Einträge geladen')
 
         if self._is_cancelled():
             return results
 
         # Analyze Firewall Rules
-        self._log('info', 'Analyzing firewall rules...')
+        if not self._update_progress('Firewall-Regeln analysieren...', 5):
+            return results
+        
+        self._log('check', f'Prüfe {len(firewall_rules)} Firewall-Regeln auf Sicherheitsprobleme...')
+        self._log('check', 'Suche nach Any-to-Any Regeln...')
+        self._log('check', 'Prüfe WAN-Zugriffsregeln...')
+        self._log('check', 'Prüfe Logging-Einstellungen...')
         firewall_findings = self.firewall_analyzer.analyze(firewall_rules, nat_rules)
         results["firewall_findings"] = [asdict(f) for f in firewall_findings]
         if firewall_findings:
-            self._log('warning', f'Found {len(firewall_findings)} firewall issues')
+            self._log('warning', f'{len(firewall_findings)} Firewall-Probleme gefunden')
+            for f in firewall_findings[:3]:
+                self._log('warning', f'  → {f.issue}')
         else:
-            self._log('success', 'No firewall issues found')
+            self._log('success', 'Keine Firewall-Probleme gefunden')
 
         # Analyze DNS Configuration
-        self._log('info', 'Analyzing DNS configuration...')
+        self._log('check', 'Analysiere DNS-Sicherheit...')
+        self._log('check', 'Prüfe DNSSEC-Status...')
+        self._log('check', 'Prüfe DNS-over-TLS (DoT)...')
+        self._log('check', 'Prüfe DNS Rebinding-Schutz...')
         dns_findings = self.dns_analyzer.analyze(dns_config, self.opnsense_host)
         results["dns_findings"] = [asdict(f) for f in dns_findings]
         if dns_findings:
-            self._log('warning', f'Found {len(dns_findings)} DNS issues')
+            self._log('warning', f'{len(dns_findings)} DNS-Probleme gefunden')
+            for f in dns_findings[:3]:
+                self._log('warning', f'  → {f.issue}')
         else:
-            self._log('success', 'No DNS issues found')
+            self._log('success', 'DNS-Konfiguration sicher')
 
         # Analyze VLANs
-        self._log('info', 'Analyzing VLAN configuration...')
+        self._log('check', f'Analysiere {len(vlans)} VLANs...')
         vlan_findings = self.vlan_analyzer.analyze(vlans, interfaces, firewall_rules)
         results["vlan_findings"] = [asdict(f) for f in vlan_findings]
         if vlan_findings:
-            self._log('warning', f'Found {len(vlan_findings)} VLAN issues')
+            self._log('warning', f'{len(vlan_findings)} VLAN-Probleme gefunden')
         else:
-            self._log('success', 'No VLAN issues found')
+            self._log('success', 'VLAN-Konfiguration OK')
 
         if self._is_cancelled():
             return results
 
-        # Step 5: Network Discovery
-        if not self._update_progress('Discovering network devices...', 5):
+        # Step 6: Network Discovery
+        if not self._update_progress('Netzwerk-Geräte ermitteln...', 6):
             return results
         
-        self._log('info', 'Starting network discovery...')
+        self._log('check', 'Starte Netzwerk-Discovery...')
         networks = self._get_scan_networks()
         self._log('info', f'Scanning {len(networks)} networks: {", ".join(networks[:3])}{"..." if len(networks) > 3 else ""}')
 
@@ -344,37 +370,45 @@ class SecurityAuditor:
         if self._is_cancelled():
             return results
 
-        # Step 6: Port Scanning (WAN-exposed ports only)
-        if not self._update_progress('Checking WAN-exposed ports...', 6):
+        # Step 7: System Security Analysis
+        if not self._update_progress('System-Sicherheit prüfen...', 7):
             return results
         
-        self._log('info', 'Analyzing NAT rules for WAN-exposed ports...')
+        self._log('check', 'Lade System-Sicherheitskonfiguration...')
+        system_config = self.client.get_system_config()
         
-        # Get WAN-exposed ports from NAT rules - these are the security concerns
+        self._log('check', 'Prüfe SSH-Konfiguration...')
+        self._log('check', 'Prüfe Web-Admin-Interface...')
+        self._log('check', 'Prüfe IDS/IPS-Status...')
+        self._log('check', 'Prüfe VPN-Konfiguration...')
+        self._log('check', 'Prüfe Logging & Backup...')
+        
+        system_findings = self.system_security_analyzer.analyze(system_config)
+        results["system_findings"] = [asdict(f) for f in system_findings]
+        results["system_config"] = system_config
+        
+        if system_findings:
+            self._log('warning', f'{len(system_findings)} System-Probleme gefunden')
+            for f in system_findings[:3]:
+                self._log('warning', f'  → [{f.category}] {f.issue}')
+        else:
+            self._log('success', 'System-Sicherheit OK')
+
+        # WAN-exposed ports check
+        self._log('check', 'Analysiere NAT-Regeln auf WAN-exponierte Ports...')
         wan_exposed_ports = self._get_wan_exposed_ports(nat_rules)
-        self._log('info', f'Found {len(wan_exposed_ports)} WAN-exposed port forwards')
+        self._log('info', f'{len(wan_exposed_ports)} WAN-exponierte Port-Forwards gefunden')
         
-        # Only scan and report ports that are exposed to WAN
         port_findings = self.port_scanner.scan_wan_exposed(wan_exposed_ports)
         results["port_findings"] = [asdict(f) for f in port_findings]
         results["wan_exposed_ports"] = wan_exposed_ports
         if port_findings:
-            self._log('warning', f'Found {len(port_findings)} WAN-exposed port security issues')
+            self._log('warning', f'{len(port_findings)} kritische WAN-Ports gefunden')
         else:
-            self._log('success', 'No critical WAN-exposed ports found')
-
-        # System Security Analysis
-        self._log('info', 'Analyzing system security configuration...')
-        system_config = self.client.get_system_config()
-        system_findings = self.system_security_analyzer.analyze(system_config)
-        results["system_findings"] = [asdict(f) for f in system_findings]
-        if system_findings:
-            self._log('warning', f'Found {len(system_findings)} system security issues')
-        else:
-            self._log('success', 'System security configuration OK')
+            self._log('success', 'Keine kritischen WAN-exponierten Ports')
 
         # Vulnerability Scanning
-        self._log('info', 'Scanning for known vulnerabilities...')
+        self._log('check', 'Prüfe auf bekannte Schwachstellen...')
 
         # Build service map from discovered devices
         service_map = {}

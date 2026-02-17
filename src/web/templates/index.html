@@ -1,451 +1,395 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetSec Auditor // OPNsense Security Operations</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/netsec.css') }}">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+    <title>OPNsense Security Auditor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <aside class="sidebar">
-        <div class="logo">
+    <!-- Sidebar -->
+    <nav class="sidebar">
+        <div class="sidebar-brand">
             <i class="fas fa-shield-halved"></i>
-            <h1>NetSec<span>Auditor v2.4</span></h1>
+            <span>SecAudit</span>
         </div>
-
-        <nav class="nav-menu">
-            <a href="#dashboard" class="nav-item active" data-page="dashboard">
-                <i class="fas fa-chart-line"></i>
-                <span data-i18n="dashboard">Overview</span>
-            </a>
-            <a href="#configuration" class="nav-item" data-page="configuration">
-                <i class="fas fa-sliders"></i>
-                <span data-i18n="configuration">Settings</span>
-            </a>
-            <a href="#reports" class="nav-item" data-page="reports">
-                <i class="fas fa-file-lines"></i>
-                <span data-i18n="reports">Reports</span>
-            </a>
-            <a href="#ignore-list" class="nav-item" data-page="ignore-list">
-                <i class="fas fa-filter"></i>
-                <span data-i18n="ignore_list">Exclusions</span>
-            </a>
-            <a href="#optimal-config" class="nav-item" data-page="optimal-config">
-                <i class="fas fa-bullseye"></i>
-                <span data-i18n="optimal_config">Hardening</span>
-            </a>
-            <a href="#devices" class="nav-item" data-page="devices">
-                <i class="fas fa-network-wired"></i>
-                <span>Asset Discovery</span>
-            </a>
-        </nav>
-
+        <ul class="sidebar-nav">
+            <li class="nav-item active" data-view="dashboard">
+                <i class="fas fa-tachometer-alt"></i>
+                <span>Dashboard</span>
+            </li>
+            <li class="nav-item" data-view="findings">
+                <i class="fas fa-bug"></i>
+                <span>Findings</span>
+            </li>
+            <li class="nav-item" data-view="firewall">
+                <i class="fas fa-fire"></i>
+                <span>Firewall</span>
+            </li>
+            <li class="nav-item" data-view="dns">
+                <i class="fas fa-globe"></i>
+                <span>DNS</span>
+            </li>
+            <li class="nav-item" data-view="system">
+                <i class="fas fa-server"></i>
+                <span>System</span>
+            </li>
+            <li class="nav-item" data-view="config">
+                <i class="fas fa-cog"></i>
+                <span>Konfiguration</span>
+            </li>
+        </ul>
         <div class="sidebar-footer">
-            <select id="language-select">
-                <option value="en">EN</option>
-                <option value="de">DE</option>
-            </select>
+            <div class="connection-status" id="connection-status">
+                <span class="status-dot offline"></span>
+                <span>Nicht verbunden</span>
+            </div>
         </div>
-    </aside>
+    </nav>
 
     <!-- Main Content -->
     <main class="main-content">
-        <!-- Top Bar -->
-        <header class="top-bar">
-            <div class="scan-controls">
-                <button id="start-scan-btn" class="btn btn-primary">
-                    <i class="fas fa-play"></i>
-                    <span data-i18n="start_scan">Start Scan</span>
-                </button>
-                <button id="refresh-btn" class="btn btn-secondary">
-                    <i class="fas fa-sync-alt"></i>
-                    <span data-i18n="refresh">Refresh</span>
-                </button>
+        <!-- Header -->
+        <header class="main-header">
+            <div class="header-left">
+                <h1 id="view-title">Security Dashboard</h1>
+                <span class="header-subtitle" id="opnsense-host">--</span>
             </div>
-            <div class="scan-status">
-                <div id="scan-status-indicator" class="status-idle">
-                    <span class="status-dot"></span>
-                    <span id="scan-status-text" data-i18n="status">Idle</span>
-                </div>
+            <div class="header-right">
+                <button class="btn btn-primary" id="btn-start-scan">
+                    <i class="fas fa-play"></i>
+                    <span>Scan starten</span>
+                </button>
+                <button class="btn btn-ghost" id="btn-refresh">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
             </div>
         </header>
 
-        <!-- Scan Progress Overlay -->
-        <div id="scan-progress-overlay" class="scan-progress-overlay hidden">
-            <div class="scan-progress-card">
-                <h3><i class="fas fa-shield-alt"></i> Security Scan in Progress</h3>
-                <div class="progress-container">
-                    <div class="progress-bar">
-                        <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
-                    </div>
-                    <span id="progress-percent">0%</span>
+        <!-- Live Scan Panel (hidden by default) -->
+        <div class="scan-panel hidden" id="scan-panel">
+            <div class="scan-header">
+                <div class="scan-title">
+                    <i class="fas fa-radar fa-spin"></i>
+                    <span>Security Scan läuft...</span>
                 </div>
-                <div class="progress-details">
-                    <p id="progress-step">Initializing...</p>
-                    <p id="progress-info">Step <span id="step-current">0</span> of <span id="step-total">7</span></p>
+                <button class="btn btn-sm btn-danger" id="btn-cancel-scan">
+                    <i class="fas fa-stop"></i> Abbrechen
+                </button>
+            </div>
+            <div class="scan-progress">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="scan-progress-fill" style="width: 0%"></div>
                 </div>
-                <div class="scan-console">
-                    <div class="console-header">
-                        <i class="fas fa-terminal"></i> Console Output
-                    </div>
-                    <div id="scan-console-output" class="console-output"></div>
+                <span class="progress-text" id="scan-progress-text">0%</span>
+            </div>
+            <div class="scan-details">
+                <div class="scan-current-check" id="scan-current-check">
+                    <i class="fas fa-circle-notch fa-spin"></i>
+                    <span>Initialisiere...</span>
                 </div>
-                <div class="progress-actions">
-                    <button id="cancel-scan-btn" class="btn btn-danger" onclick="cancelScan()">
-                        <i class="fas fa-times"></i> Cancel Scan
-                    </button>
+                <div class="scan-stats">
+                    <div class="stat"><span id="stat-rules-checked">0</span> Regeln</div>
+                    <div class="stat"><span id="stat-findings">0</span> Findings</div>
+                    <div class="stat"><span id="stat-duration">0s</span></div>
+                </div>
+            </div>
+            <div class="scan-log" id="scan-log">
+                <div class="log-entry info">
+                    <span class="log-time">--:--:--</span>
+                    <span class="log-msg">Warte auf Start...</span>
                 </div>
             </div>
         </div>
 
-        <!-- Dashboard Page -->
-        <div id="page-dashboard" class="page active">
-            <h2 data-i18n="dashboard">Dashboard</h2>
-
-            <!-- Security Score -->
-            <div class="security-score-container">
-                <div class="security-score-card">
-                    <div class="score-circle" id="score-circle">
-                        <span class="score-value" id="security-score">--</span>
-                        <span class="score-label">/ 100</span>
+        <!-- Dashboard View -->
+        <div class="view active" id="view-dashboard">
+            <!-- Score Section -->
+            <section class="score-section">
+                <div class="score-card main-score">
+                    <div class="score-ring" id="score-ring">
+                        <svg viewBox="0 0 100 100">
+                            <circle class="score-bg" cx="50" cy="50" r="45"/>
+                            <circle class="score-fg" cx="50" cy="50" r="45" id="score-circle"/>
+                        </svg>
+                        <div class="score-value">
+                            <span id="security-score">--</span>
+                            <small>/100</small>
+                        </div>
                     </div>
-                    <div class="score-details">
-                        <h3>Security Score</h3>
-                        <span class="grade" id="security-grade">--</span>
-                        <p class="score-timestamp" id="score-timestamp"></p>
-                    </div>
-                </div>
-                <div class="priority-actions-card">
-                    <h3><i class="fas fa-exclamation-triangle"></i> Priority Actions</h3>
-                    <ul id="priority-actions-list"></ul>
-                </div>
-            </div>
-
-            <!-- Summary Cards -->
-            <div class="summary-cards">
-                <div class="summary-card critical">
-                    <div class="card-icon"><i class="fas fa-exclamation-circle"></i></div>
-                    <div class="card-content">
-                        <h3 id="critical-count">0</h3>
-                        <p data-i18n="critical">Critical</p>
+                    <div class="score-info">
+                        <span class="score-grade" id="security-grade">--</span>
+                        <span class="score-label">Security Score</span>
                     </div>
                 </div>
-                <div class="summary-card high">
-                    <div class="card-icon"><i class="fas fa-exclamation-triangle"></i></div>
-                    <div class="card-content">
-                        <h3 id="high-count">0</h3>
-                        <p data-i18n="high">High</p>
+                <div class="score-breakdown">
+                    <div class="breakdown-item">
+                        <span class="breakdown-label">Firewall</span>
+                        <div class="breakdown-bar"><div class="fill" id="score-firewall" style="width:0%"></div></div>
+                        <span class="breakdown-value" id="score-firewall-val">--</span>
+                    </div>
+                    <div class="breakdown-item">
+                        <span class="breakdown-label">DNS</span>
+                        <div class="breakdown-bar"><div class="fill" id="score-dns" style="width:0%"></div></div>
+                        <span class="breakdown-value" id="score-dns-val">--</span>
+                    </div>
+                    <div class="breakdown-item">
+                        <span class="breakdown-label">System</span>
+                        <div class="breakdown-bar"><div class="fill" id="score-system" style="width:0%"></div></div>
+                        <span class="breakdown-value" id="score-system-val">--</span>
+                    </div>
+                    <div class="breakdown-item">
+                        <span class="breakdown-label">VPN</span>
+                        <div class="breakdown-bar"><div class="fill" id="score-vpn" style="width:0%"></div></div>
+                        <span class="breakdown-value" id="score-vpn-val">--</span>
                     </div>
                 </div>
-                <div class="summary-card medium">
-                    <div class="card-icon"><i class="fas fa-info-circle"></i></div>
-                    <div class="card-content">
-                        <h3 id="medium-count">0</h3>
-                        <p data-i18n="medium">Medium</p>
+            </section>
+
+            <!-- Severity Summary -->
+            <section class="severity-summary">
+                <div class="severity-card critical">
+                    <div class="severity-icon"><i class="fas fa-skull-crossbones"></i></div>
+                    <div class="severity-data">
+                        <span class="severity-count" id="count-critical">0</span>
+                        <span class="severity-label">Critical</span>
                     </div>
                 </div>
-                <div class="summary-card low">
-                    <div class="card-icon"><i class="fas fa-check-circle"></i></div>
-                    <div class="card-content">
-                        <h3 id="low-count">0</h3>
-                        <p data-i18n="low">Low</p>
+                <div class="severity-card high">
+                    <div class="severity-icon"><i class="fas fa-exclamation-triangle"></i></div>
+                    <div class="severity-data">
+                        <span class="severity-count" id="count-high">0</span>
+                        <span class="severity-label">High</span>
                     </div>
                 </div>
-            </div>
-
-            <!-- Findings by Category -->
-            <div class="findings-container">
-                <!-- Critical Findings -->
-                <div class="findings-section">
-                    <h3 class="section-title critical-bg">
-                        <i class="fas fa-exclamation-circle"></i>
-                        <span data-i18n="critical">Critical</span>
-                        <span class="badge" id="critical-badge">0</span>
-                    </h3>
-                    <div id="critical-findings" class="findings-list"></div>
+                <div class="severity-card medium">
+                    <div class="severity-icon"><i class="fas fa-exclamation-circle"></i></div>
+                    <div class="severity-data">
+                        <span class="severity-count" id="count-medium">0</span>
+                        <span class="severity-label">Medium</span>
+                    </div>
                 </div>
-
-                <!-- High Findings -->
-                <div class="findings-section">
-                    <h3 class="section-title high-bg">
-                        <i class="fas fa-exclamation-triangle"></i>
-                        <span data-i18n="high">High</span>
-                        <span class="badge" id="high-badge">0</span>
-                    </h3>
-                    <div id="high-findings" class="findings-list"></div>
+                <div class="severity-card low">
+                    <div class="severity-icon"><i class="fas fa-info-circle"></i></div>
+                    <div class="severity-data">
+                        <span class="severity-count" id="count-low">0</span>
+                        <span class="severity-label">Low</span>
+                    </div>
                 </div>
+            </section>
 
-                <!-- Medium Findings -->
-                <div class="findings-section">
-                    <h3 class="section-title medium-bg">
-                        <i class="fas fa-info-circle"></i>
-                        <span data-i18n="medium">Medium</span>
-                        <span class="badge" id="medium-badge">0</span>
-                    </h3>
-                    <div id="medium-findings" class="findings-list"></div>
+            <!-- Quick Stats -->
+            <section class="quick-stats">
+                <div class="stat-card">
+                    <i class="fas fa-shield-alt"></i>
+                    <div class="stat-data">
+                        <span class="stat-value" id="stat-fw-rules">--</span>
+                        <span class="stat-label">Firewall Regeln</span>
+                    </div>
                 </div>
+                <div class="stat-card">
+                    <i class="fas fa-random"></i>
+                    <div class="stat-data">
+                        <span class="stat-value" id="stat-nat-rules">--</span>
+                        <span class="stat-label">NAT Regeln</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-network-wired"></i>
+                    <div class="stat-data">
+                        <span class="stat-value" id="stat-interfaces">--</span>
+                        <span class="stat-label">Interfaces</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-clock"></i>
+                    <div class="stat-data">
+                        <span class="stat-value" id="stat-last-scan">--</span>
+                        <span class="stat-label">Letzter Scan</span>
+                    </div>
+                </div>
+            </section>
 
-                <!-- Low Findings -->
-                <div class="findings-section">
-                    <h3 class="section-title low-bg">
+            <!-- Top Findings -->
+            <section class="top-findings">
+                <div class="section-header">
+                    <h2><i class="fas fa-exclamation-triangle"></i> Kritische Findings</h2>
+                    <a href="#" class="link" data-view="findings">Alle anzeigen →</a>
+                </div>
+                <div class="findings-list" id="top-findings-list">
+                    <div class="no-data">
                         <i class="fas fa-check-circle"></i>
-                        <span data-i18n="low">Low</span>
-                        <span class="badge" id="low-badge">0</span>
-                    </h3>
-                    <div id="low-findings" class="findings-list"></div>
+                        <p>Starte einen Scan um Findings zu sehen</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Findings View -->
+        <div class="view" id="view-findings">
+            <div class="view-header">
+                <div class="filter-bar">
+                    <select id="filter-severity" class="filter-select">
+                        <option value="all">Alle Schweregrade</option>
+                        <option value="critical">Critical</option>
+                        <option value="high">High</option>
+                        <option value="medium">Medium</option>
+                        <option value="low">Low</option>
+                    </select>
+                    <select id="filter-category" class="filter-select">
+                        <option value="all">Alle Kategorien</option>
+                        <option value="firewall">Firewall</option>
+                        <option value="dns">DNS</option>
+                        <option value="system">System</option>
+                        <option value="vpn">VPN</option>
+                    </select>
+                    <input type="search" id="filter-search" class="filter-search" placeholder="Suchen...">
+                </div>
+            </div>
+            <div class="findings-container" id="all-findings-list">
+                <div class="no-data">
+                    <i class="fas fa-search"></i>
+                    <p>Keine Findings vorhanden</p>
                 </div>
             </div>
         </div>
 
-        <!-- Configuration Page -->
-        <div id="page-configuration" class="page">
-            <h2 data-i18n="configuration">Configuration</h2>
+        <!-- Firewall View -->
+        <div class="view" id="view-firewall">
+            <div class="view-header">
+                <h2>Firewall Regelanalyse</h2>
+            </div>
+            <div class="rules-analysis">
+                <div class="analysis-summary" id="fw-analysis-summary">
+                    <div class="summary-item">
+                        <span class="label">Analysierte Regeln:</span>
+                        <span class="value" id="fw-total-rules">--</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="label">Problematische Regeln:</span>
+                        <span class="value warning" id="fw-problem-rules">--</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="label">Any-to-Any Regeln:</span>
+                        <span class="value danger" id="fw-any-rules">--</span>
+                    </div>
+                </div>
+                <div class="rules-list" id="fw-rules-list">
+                    <div class="no-data">
+                        <i class="fas fa-fire"></i>
+                        <p>Firewall Regeln werden nach Scan angezeigt</p>
+                    </div>
+                </div>
+            </div>
+        </div>
 
-            <div class="config-container">
-                <!-- OPNsense Configuration -->
-                <div class="config-section">
-                    <h3 data-i18n="opnsense_config">OPNsense Configuration</h3>
-                    <form id="opnsense-config-form">
-                        <div class="form-group">
-                            <label for="opnsense-host" data-i18n="host">Host</label>
-                            <input type="text" id="opnsense-host" placeholder="192.168.1.1">
+        <!-- DNS View -->
+        <div class="view" id="view-dns">
+            <div class="view-header">
+                <h2>DNS Konfiguration</h2>
+            </div>
+            <div class="dns-analysis">
+                <div class="dns-status-cards" id="dns-status-cards">
+                    <div class="status-card">
+                        <div class="status-icon"><i class="fas fa-shield-alt"></i></div>
+                        <div class="status-info">
+                            <span class="status-label">DNSSEC</span>
+                            <span class="status-value" id="dns-dnssec">--</span>
                         </div>
-                        <div class="form-group">
-                            <label for="api-key" data-i18n="api_key">API Key</label>
-                            <input type="text" id="api-key" placeholder="">
+                    </div>
+                    <div class="status-card">
+                        <div class="status-icon"><i class="fas fa-lock"></i></div>
+                        <div class="status-info">
+                            <span class="status-label">DNS over TLS</span>
+                            <span class="status-value" id="dns-dot">--</span>
                         </div>
-                        <div class="form-group">
-                            <label for="api-secret" data-i18n="api_secret">API Secret</label>
-                            <input type="password" id="api-secret" placeholder="">
+                    </div>
+                    <div class="status-card">
+                        <div class="status-icon"><i class="fas fa-ban"></i></div>
+                        <div class="status-info">
+                            <span class="status-label">Rebinding Schutz</span>
+                            <span class="status-value" id="dns-rebind">--</span>
                         </div>
-                    </form>
+                    </div>
+                </div>
+                <div class="dns-servers" id="dns-servers-list">
+                    <h3>Konfigurierte DNS Server</h3>
+                    <div class="server-list">
+                        <div class="no-data">
+                            <i class="fas fa-globe"></i>
+                            <p>DNS Server werden nach Scan angezeigt</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- System View -->
+        <div class="view" id="view-system">
+            <div class="view-header">
+                <h2>System Sicherheit</h2>
+            </div>
+            <div class="system-analysis">
+                <div class="system-checks" id="system-checks">
+                    <div class="no-data">
+                        <i class="fas fa-server"></i>
+                        <p>System-Checks werden nach Scan angezeigt</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Config View -->
+        <div class="view" id="view-config">
+            <div class="view-header">
+                <h2>OPNsense Verbindung</h2>
+            </div>
+            <div class="config-form">
+                <div class="form-section">
+                    <h3><i class="fas fa-plug"></i> API Verbindung</h3>
+                    <div class="form-group">
+                        <label for="cfg-host">OPNsense Host</label>
+                        <input type="text" id="cfg-host" placeholder="192.168.1.1 oder opnsense.local">
+                        <span class="form-hint">IP-Adresse oder Hostname der OPNsense</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="cfg-apikey">API Key</label>
+                        <input type="text" id="cfg-apikey" placeholder="API Key aus OPNsense">
+                        <span class="form-hint">System → Access → Users → API Keys</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="cfg-apisecret">API Secret</label>
+                        <input type="password" id="cfg-apisecret" placeholder="API Secret">
+                    </div>
                     <div class="form-actions">
-                        <button id="load-networks-btn" class="btn btn-secondary" onclick="loadNetworksFromOPNsense()">
-                            <i class="fas fa-sync"></i> Load Networks from OPNsense
+                        <button class="btn btn-primary" id="btn-test-connection">
+                            <i class="fas fa-plug"></i> Verbindung testen
+                        </button>
+                        <button class="btn btn-success" id="btn-save-config">
+                            <i class="fas fa-save"></i> Speichern
                         </button>
                     </div>
+                    <div class="connection-result hidden" id="connection-result"></div>
                 </div>
-
-                <!-- Network Classification -->
-                <div class="config-section" id="network-classification-section">
-                    <h3><i class="fas fa-network-wired"></i> Network Classification</h3>
-                    <p class="section-description">Classify your networks as WAN (external) or LAN (internal). Only ports exposed from WAN to LAN will be flagged as security issues.</p>
-                    
-                    <div id="networks-loading" class="loading-indicator hidden">
-                        <i class="fas fa-spinner fa-spin"></i> Loading networks...
-                    </div>
-                    
-                    <div id="networks-container">
-                        <div id="no-networks-msg" class="info-message">
-                            <i class="fas fa-info-circle"></i> Click "Load Networks from OPNsense" to fetch available networks.
-                        </div>
-                        
-                        <div id="networks-list" class="networks-list hidden"></div>
-                    </div>
-                    
-                    <div id="network-actions" class="form-actions hidden">
-                        <button id="save-networks-btn" class="btn btn-primary" onclick="saveNetworkClassification()">
-                            <i class="fas fa-save"></i> Save Network Configuration
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Scan Options -->
-                <div class="config-section">
-                    <h3 data-i18n="scan_options">Scan Options</h3>
-                    <form id="scan-options-form">
-                        <div class="form-group checkbox">
-                            <input type="checkbox" id="aggressive-scan">
-                            <label for="aggressive-scan" data-i18n="aggressive_scan">Aggressive Scan</label>
-                        </div>
-                        <div class="form-group">
-                            <label for="port-scan-timeout" data-i18n="port_scan_timeout">Port Scan Timeout (s)</label>
-                            <input type="number" id="port-scan-timeout" value="300">
-                        </div>
-                        <div class="form-group">
-                            <label for="max-parallel-scans" data-i18n="max_parallel_scans">Max Parallel Scans</label>
-                            <input type="number" id="max-parallel-scans" value="10">
-                        </div>
-                        <div class="form-group checkbox">
-                            <input type="checkbox" id="enable-vulnerability-scan" checked>
-                            <label for="enable-vulnerability-scan" data-i18n="enable_vulnerability_scan">Enable CVE Scanning</label>
-                        </div>
-                    </form>
-                </div>
-
-                <div class="config-actions">
-                    <button id="save-config-btn" class="btn btn-primary">
-                        <i class="fas fa-save"></i>
-                        <span data-i18n="save">Save</span>
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Reports Page -->
-        <div id="page-reports" class="page">
-            <h2 data-i18n="reports">Reports</h2>
-            <div id="reports-list" class="reports-container"></div>
-        </div>
-
-        <!-- Ignore List Page -->
-        <div id="page-ignore-list" class="page">
-            <h2 data-i18n="ignore_list">Ignore List</h2>
-            <div class="ignore-list-container">
-                <div class="ignore-section">
-                    <h3 data-i18n="port">Ports</h3>
-                    <div id="ignore-ports-list"></div>
-                </div>
-                <div class="ignore-section">
-                    <h3>Firewall Rules</h3>
-                    <div id="ignore-firewall-list"></div>
-                </div>
-                <div class="ignore-section">
-                    <h3>DNS</h3>
-                    <div id="ignore-dns-list"></div>
-                </div>
-                <div class="ignore-section">
-                    <h3>Hosts</h3>
-                    <div id="ignore-hosts-list"></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Optimal Configuration Page -->
-        <div id="page-optimal-config" class="page">
-            <h2 data-i18n="optimal_config">Optimal Security Configuration</h2>
-            
-            <!-- Implementation Guide -->
-            <div class="implementation-guide">
-                <h3><i class="fas fa-clipboard-list"></i> Implementation Guide</h3>
-                <div id="implementation-phases"></div>
-            </div>
-
-            <!-- Category Recommendations -->
-            <div class="config-recommendations">
-                <h3><i class="fas fa-cogs"></i> Configuration Recommendations</h3>
-                
-                <div class="recommendation-category">
-                    <h4><i class="fas fa-fire"></i> Firewall</h4>
-                    <div id="firewall-recommendations"></div>
-                </div>
-
-                <div class="recommendation-category">
-                    <h4><i class="fas fa-globe"></i> DNS Security</h4>
-                    <div id="dns-recommendations"></div>
-                </div>
-
-                <div class="recommendation-category">
-                    <h4><i class="fas fa-network-wired"></i> Network Segmentation</h4>
-                    <div id="network-recommendations"></div>
-                </div>
-
-                <div class="recommendation-category">
-                    <h4><i class="fas fa-server"></i> System Security</h4>
-                    <div id="system-recommendations"></div>
-                </div>
-
-                <div class="recommendation-category">
-                    <h4><i class="fas fa-chart-line"></i> Monitoring</h4>
-                    <div id="monitoring-recommendations"></div>
-                </div>
-            </div>
-
-            <!-- Optimal Config Summary -->
-            <div class="optimal-config-summary">
-                <h3><i class="fas fa-check-circle"></i> Target Configuration</h3>
-                <div id="optimal-config-details"></div>
-            </div>
-        </div>
-
-        <!-- Internal Devices Page -->
-        <div id="page-devices" class="page">
-            <h2><i class="fas fa-desktop"></i> Internal Network Devices</h2>
-            <p class="page-description">Scan and view all devices in your internal networks with their open ports. This is for informational purposes - internal ports are not security issues unless exposed to WAN.</p>
-            
-            <div class="devices-controls">
-                <button id="scan-internal-btn" class="btn btn-primary" onclick="scanInternalDevices()">
-                    <i class="fas fa-search"></i> Scan Internal Networks
-                </button>
-                <span id="devices-scan-status" class="scan-status-text"></span>
-            </div>
-            
-            <div id="devices-scan-progress" class="internal-scan-progress hidden">
-                <div class="scan-progress-header">
-                    <div class="scan-progress-info">
-                        <i class="fas fa-spinner fa-spin"></i>
-                        <span id="devices-progress-text">Initializing...</span>
-                    </div>
-                    <div class="scan-progress-stats">
-                        <span id="devices-hosts-progress">0 / 0 hosts</span>
-                    </div>
-                </div>
-                
-                <div class="scan-progress-bar">
-                    <div id="devices-progress-fill" class="progress-fill" style="width: 0%"></div>
-                </div>
-                
-                <div class="internal-scan-panels">
-                    <!-- Discovered Hosts Panel -->
-                    <div class="discovered-hosts-panel">
-                        <h4><i class="fas fa-server"></i> Discovered Hosts</h4>
-                        <div id="discovered-hosts-list" class="discovered-hosts-list">
-                            <div class="no-hosts-yet">Waiting for host discovery...</div>
-                        </div>
-                    </div>
-                    
-                    <!-- Console Output Panel -->
-                    <div class="console-panel">
-                        <h4><i class="fas fa-terminal"></i> Scan Console</h4>
-                        <div id="internal-scan-console" class="internal-scan-console"></div>
-                    </div>
-                </div>
-                
-                <button class="btn btn-danger btn-sm" onclick="cancelInternalScan()">
-                    <i class="fas fa-stop"></i> Cancel Scan
-                </button>
-            </div>
-            
-            <div id="devices-summary" class="devices-summary hidden">
-                <div class="summary-item">
-                    <span class="label">Total Devices:</span>
-                    <span id="total-devices-count" class="value">0</span>
-                </div>
-                <div class="summary-item">
-                    <span class="label">Active Devices:</span>
-                    <span id="active-devices-count" class="value">0</span>
-                </div>
-                <div class="summary-item">
-                    <span class="label">Open Ports Found:</span>
-                    <span id="total-ports-count" class="value">0</span>
-                </div>
-            </div>
-            
-            <div id="devices-table-container" class="table-container hidden">
-                <table id="devices-table" class="data-table">
-                    <thead>
-                        <tr>
-                            <th>IP Address</th>
-                            <th>Hostname</th>
-                            <th>MAC Address</th>
-                            <th>Network/VLAN</th>
-                            <th>Status</th>
-                            <th>Open Ports</th>
-                        </tr>
-                    </thead>
-                    <tbody id="devices-table-body"></tbody>
-                </table>
-            </div>
-            
-            <div id="no-devices-msg" class="info-message">
-                <i class="fas fa-info-circle"></i> Click "Scan Internal Networks" to discover devices in your LAN.
             </div>
         </div>
     </main>
 
-    <div id="toast-container"></div>
-    <script src="{{ url_for('static', filename='js/netsec.js') }}"></script>
+    <!-- Finding Detail Modal -->
+    <div class="modal hidden" id="finding-modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Finding Details</h3>
+                <button class="modal-close" id="modal-close"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body" id="modal-body"></div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

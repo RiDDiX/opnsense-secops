@@ -1,10 +1,8 @@
-version: '3.8'
-
 services:
   opnsense-auditor:
+    build: .
     image: ghcr.io/riddix/opnsense-secops:main
     container_name: opnsense-security-auditor
-    network_mode: bridge
     volumes:
       - ./config:/app/config
       - ./reports:/app/reports
@@ -16,3 +14,6 @@ services:
     ports:
       - "5000:5000"
     restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW

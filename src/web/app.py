@@ -139,7 +139,7 @@ def get_translation(key, lang='en'):
 
 @app.route('/')
 def index():
-    """Main dashboard page"""
+    """Main dashboard"""
     return render_template('index.html')
 
 
@@ -1196,6 +1196,164 @@ def get_internal_scan_status():
         'success': True,
         **internal_scan_state
     })
+
+
+# ═══════════════════════════════════════════════════════════════
+# NEW DASHBOARD API ENDPOINTS (v2)
+# ═══════════════════════════════════════════════════════════════
+
+@app.route('/api/config/save', methods=['POST'])
+def save_config_v2():
+    """Save configuration (simplified for new dashboard)"""
+    try:
+        data = request.json
+        config_file = os.path.join(CONFIG_DIR, 'opnsense.json')
+        
+        config = {
+            'host': data.get('host', ''),
+            'api_key': data.get('api_key', ''),
+            'api_secret': data.get('api_secret', '')
+        }
+        
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(config_file, 'w') as f:
+            json.dump(config, f, indent=2)
+        
+        # Update environment
+        for key, val in config.items():
+            if val:
+                os.environ[f'OPNSENSE_{key.upper()}'] = val
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/connection/test', methods=['POST'])
+def test_connection():
+    """Test OPNsense API connection"""
+    try:
+        data = request.json
+        host = data.get('host', '')
+        api_key = data.get('api_key', '')
+        api_secret = data.get('api_secret', '')
+        
+        if not all([host, api_key, api_secret]):
+            return jsonify({'success': False, 'error': 'Alle Felder müssen ausgefüllt sein'})
+        
+        client = OPNsenseClient(host, api_key, api_secret, verify_ssl=False)
+        
+        if client.test_connection():
+            # Get version info
+            sys_info = client.get_system_info()
+            version = sys_info.get('product_version', sys_info.get('version', ''))
+            return jsonify({
+                'success': True,
+                'version': version,
+                'message': 'Verbindung erfolgreich'
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Verbindung fehlgeschlagen'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/results/latest', methods=['GET'])
+def get_latest_results():
+    """Get latest scan results with full details"""
+    try:
+        # Find latest report
+        if not os.path.exists(REPORTS_DIR):
+            return jsonify({'success': False, 'error': 'Keine Reports vorhanden'})
+        
+        json_files = [f for f in os.listdir(REPORTS_DIR) if f.endswith('.json')]
+        if not json_files:
+            return jsonify({'success': False, 'error': 'Keine Reports vorhanden'})
+        
+        json_files.sort(reverse=True)
+        latest = json_files[0]
+        
+        with open(os.path.join(REPORTS_DIR, latest), 'r') as f:
+            results = json.load(f)
+        
+        # Calculate category scores
+        results['category_scores'] = calculate_category_scores(results)
+        
+        # Add statistics if missing
+        if 'statistics' not in results:
+            results['statistics'] = {}
+        
+        return jsonify({
+            'success': True,
+            'results': results,
+            'report_file': latest
+        })
+    except Exception as e:
+        logger.error(f"Failed to get latest results: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def calculate_category_scores(results):
+    """Calculate security scores per category"""
+    scores = {
+        'firewall': 100,
+        'dns': 100,
+        'system': 100,
+        'vpn': 100
+    }
+    
+    # Deduct points based on findings
+    severity_weights = {'critical': 25, 'high': 15, 'medium': 8, 'low': 3}
+    
+    for finding in results.get('firewall_findings', []):
+        sev = (finding.get('severity', '') or '').lower()
+        scores['firewall'] = max(0, scores['firewall'] - severity_weights.get(sev, 0))
+    
+    for finding in results.get('dns_findings', []):
+        sev = (finding.get('severity', '') or '').lower()
+        scores['dns'] = max(0, scores['dns'] - severity_weights.get(sev, 0))
+    
+    for finding in results.get('system_findings', []):
+        sev = (finding.get('severity', '') or '').lower()
+        cat = (finding.get('category', '') or '').lower()
+        if 'vpn' in cat:
+            scores['vpn'] = max(0, scores['vpn'] - severity_weights.get(sev, 0))
+        else:
+            scores['system'] = max(0, scores['system'] - severity_weights.get(sev, 0))
+    
+    return scores
+
+
+@app.route('/api/data/raw', methods=['GET'])
+def get_raw_data():
+    """Get raw OPNsense data (for debugging/verification)"""
+    try:
+        host = os.getenv('OPNSENSE_HOST', '')
+        api_key = os.getenv('OPNSENSE_API_KEY', '')
+        api_secret = os.getenv('OPNSENSE_API_SECRET', '')
+        
+        if not all([host, api_key, api_secret]):
+            return jsonify({'success': False, 'error': 'OPNsense nicht konfiguriert'})
+        
+        client = OPNsenseClient(host, api_key, api_secret, verify_ssl=False)
+        
+        raw_data = {
+            'firewall_rules': client.get_firewall_rules(),
+            'nat_rules': client.get_nat_rules(),
+            'interfaces': client.get_interfaces(),
+            'dns_config': client.get_dns_config(),
+            'system_config': client.get_system_config(),
+            'vlans': client.get_vlans()
+        }
+        
+        return jsonify({
+            'success': True,
+            'data': raw_data,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Failed to get raw data: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':

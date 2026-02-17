@@ -1,6 +1,10 @@
-# NetSec Auditor for OPNsense
+# OPNsense Security Auditor
 
-Security audit toolkit for OPNsense firewalls. Scans firewall configs, open ports, DNS settings and VLAN setups. Outputs reports with fix recommendations.
+Security analysis tool for OPNsense firewalls. Analyzes firewall rules, NAT configs, DNS settings, system hardening and network segmentation. Provides actionable recommendations.
+
+[![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker)](https://github.com/RiDDiX/opnsense-secops/pkgs/container/opnsense-secops)
+[![OPNsense](https://img.shields.io/badge/OPNsense-25.x-orange)](https://opnsense.org/)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
 
@@ -11,31 +15,38 @@ Security audit toolkit for OPNsense firewalls. Scans firewall configs, open port
 <a name="english"></a>
 ## English
 
-### What it does
+### Features
 
-- **Firewall Analysis** - Finds risky rules like any-to-any, missing logs, open NAT forwards
-- **Port Scanner** - Checks your network for exposed services (SSH, RDP, DBs, etc.)
-- **DNS Audit** - DNSSEC, DoT, rebinding protection, open resolver checks
-- **VLAN Check** - Segmentation analysis, isolation verification
-- **Asset Discovery** - Device enumeration with MAC lookup
-- **Reports** - HTML/JSON/TXT output with severity ratings
+| Module | Description |
+|--------|-------------|
+| **Firewall** | Detects any-to-any rules, missing logging, insecure WAN access, NAT misconfigs |
+| **DNS** | Checks DNSSEC, DNS-over-TLS, rebinding protection, open resolver status |
+| **System** | Analyzes SSH config, web admin security, IDS/IPS, VPN, logging |
+| **Network** | VLAN segmentation, device discovery, WAN-exposed port detection |
+| **Reports** | HTML/JSON/TXT with severity ratings and OPNsense menu paths |
+
+### Dashboard
+
+- Real-time scan progress with detailed check status
+- Security score per category (Firewall, DNS, System, VPN)
+- Findings with severity, description and fix instructions
+- Direct links to OPNsense config pages
+- Dark theme optimized for SOC environments
 
 ### Quick Start
 
 ```bash
-# clone repo
 git clone https://github.com/RiDDiX/opnsense-secops.git
 cd opnsense-secops
 
-# set credentials
+# Configure
 cp .env.example .env
-# edit .env with your OPNsense API key/secret
+nano .env  # Set OPNSENSE_HOST, API_KEY, API_SECRET
 
-# run
+# Run
 docker-compose up -d
 
-# open browser
-# http://localhost:5000
+# Open http://localhost:5000
 ```
 
 ### Config
@@ -128,29 +139,36 @@ Reduce `port_scan_timeout` or increase `max_parallel_scans`.
 
 ### Funktionen
 
-- **Firewall-Analyse** - Findet riskante Regeln (Any-to-Any, fehlende Logs, offene NAT-Forwards)
-- **Port-Scanner** - Prüft Netzwerk auf exponierte Dienste (SSH, RDP, DBs, etc.)
-- **DNS-Audit** - DNSSEC, DoT, Rebinding-Schutz, Open-Resolver-Check
-- **VLAN-Prüfung** - Segmentierung, Isolations-Verifizierung
-- **Asset Discovery** - Geräteerkennung mit MAC-Lookup
-- **Reports** - HTML/JSON/TXT mit Severity-Bewertung
+| Modul | Beschreibung |
+|-------|--------------|
+| **Firewall** | Erkennt Any-to-Any Regeln, fehlendes Logging, unsichere WAN-Zugriffe, NAT-Fehlkonfigurationen |
+| **DNS** | Prüft DNSSEC, DNS-over-TLS, Rebinding-Schutz, Open-Resolver-Status |
+| **System** | Analysiert SSH-Konfig, Web-Admin-Sicherheit, IDS/IPS, VPN, Logging |
+| **Netzwerk** | VLAN-Segmentierung, Geräte-Discovery, WAN-exponierte Ports |
+| **Reports** | HTML/JSON/TXT mit Severity-Bewertung und OPNsense-Menüpfaden |
+
+### Dashboard
+
+- Echtzeit-Scan-Fortschritt mit detailliertem Check-Status
+- Security-Score pro Kategorie (Firewall, DNS, System, VPN)
+- Findings mit Severity, Beschreibung und Behebungsanleitung
+- Direktlinks zu OPNsense-Konfigurationsseiten
+- Dark Theme für SOC-Umgebungen
 
 ### Schnellstart
 
 ```bash
-# Repo klonen
 git clone https://github.com/RiDDiX/opnsense-secops.git
 cd opnsense-secops
 
-# Zugangsdaten setzen
+# Konfigurieren
 cp .env.example .env
-# .env bearbeiten mit OPNsense API Key/Secret
+nano .env  # OPNSENSE_HOST, API_KEY, API_SECRET setzen
 
 # Starten
 docker-compose up -d
 
-# Browser öffnen
-# http://localhost:5000
+# Öffnen: http://localhost:5000
 ```
 
 ### Konfiguration
