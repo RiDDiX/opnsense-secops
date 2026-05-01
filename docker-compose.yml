@@ -10,10 +10,20 @@ services:
       - OPNSENSE_HOST=${OPNSENSE_HOST:-192.168.1.1}
       - OPNSENSE_API_KEY=${OPNSENSE_API_KEY}
       - OPNSENSE_API_SECRET=${OPNSENSE_API_SECRET}
+      - OPNSENSE_API_TIMEOUT=${OPNSENSE_API_TIMEOUT:-30}
+      - OPNSENSE_INSECURE_TLS=${OPNSENSE_INSECURE_TLS:-0}
+      - SECOPS_SECRET_KEY=${SECOPS_SECRET_KEY:-}
       - SCAN_NETWORK=${SCAN_NETWORK:-192.168.1.0/24}
+      - ADDITIONAL_NETWORKS=${ADDITIONAL_NETWORKS:-}
     ports:
       - "5000:5000"
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

@@ -1,7 +1,4 @@
-"""
-DNS Configuration Analyzer
-Analyzes DNS/Unbound configuration for security issues
-"""
+"""DNS analyzer for OPNsense Unbound and forwarders."""
 import logging
 from dataclasses import dataclass
 
@@ -9,7 +6,28 @@ import dns.message
 import dns.query
 import dns.resolver
 
+from src.analyzers._utils import truthy
+
 logger = logging.getLogger(__name__)
+
+# Public recursive resolvers seen in the wild. List is configurable via
+# rules.yaml -> dns_security.public_dns_servers, this is just the fallback.
+_DEFAULT_PUBLIC_DNS = (
+    "8.8.8.8", "8.8.4.4",
+    "1.1.1.1", "1.0.0.1",
+    "9.9.9.9", "149.112.112.112",
+    "208.67.222.222", "208.67.220.220",
+    "94.140.14.14", "94.140.15.15",
+    "8.26.56.26", "8.20.247.20",
+    "76.76.2.0", "76.76.10.0",
+    "2001:4860:4860::8888", "2001:4860:4860::8844",
+    "2606:4700:4700::1111", "2606:4700:4700::1001",
+    "2620:fe::fe", "2620:fe::9",
+)
+
+# msgcachesize is bytes per Unbound docs. 50 MiB is a reasonable lower bound
+# for a household resolver; default is ~4 MB.
+_CACHE_MIN_BYTES = 50 * 1024 * 1024
 
 
 @dataclass
@@ -53,12 +71,12 @@ class DNSAnalyzer:
 
         # OPNsense Unbound
         unbound = dns_config.get("unbound", {})
-        if unbound.get("enabled", "0") == "1":
+        if truthy(unbound.get("enabled")):
             servers.append({
                 "ip": opnsense_ip,
                 "type": "unbound",
                 "name": "OPNsense Unbound",
-                "forwarding": unbound.get("forwarding", "0") == "1"
+                "forwarding": truthy(unbound.get("forwarding")),
             })
 
         # Check forwarding servers
@@ -76,7 +94,7 @@ class DNSAnalyzer:
 
         # Check dnsmasq
         dnsmasq = dns_config.get("dnsmasq", {})
-        if dnsmasq.get("enabled", "0") == "1":
+        if truthy(dnsmasq.get("enabled")):
             servers.append({
                 "ip": opnsense_ip,
                 "type": "dnsmasq",
@@ -109,7 +127,9 @@ class DNSAnalyzer:
         """Analyze active DNS servers for security issues"""
         findings = []
 
-        public_dns = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9", "208.67.222.222"]
+        public_dns = list(
+            self.dns_security.get("public_dns_servers") or _DEFAULT_PUBLIC_DNS
+        )
 
         for srv in servers:
             ip = srv.get("ip", "")
@@ -216,7 +236,7 @@ class DNSAnalyzer:
 
         # Check DNSSEC
         if not self._is_check_excepted("dnssec_enabled"):
-            dnssec_enabled = unbound.get("dnssec", "0") == "1"
+            dnssec_enabled = truthy(unbound.get("dnssec"))
             if not dnssec_enabled:
                 findings.append(DNSFinding(
                     severity="HIGH",
@@ -230,7 +250,7 @@ class DNSAnalyzer:
 
         # Check DNS Rebinding Protection
         if not self._is_check_excepted("rebinding_protection"):
-            rebinding_protection = unbound.get("private_domain", "0") == "1"
+            rebinding_protection = truthy(unbound.get("private_domain"))
             if not rebinding_protection:
                 findings.append(DNSFinding(
                     severity="CRITICAL",
@@ -244,7 +264,7 @@ class DNSAnalyzer:
 
         # Check DNS over TLS
         if not self._is_check_excepted("dot_enabled"):
-            dot_enabled = unbound.get("dot", "0") == "1"
+            dot_enabled = truthy(unbound.get("dot"))
             if not dot_enabled:
                 findings.append(DNSFinding(
                     severity="MEDIUM",
@@ -258,20 +278,31 @@ class DNSAnalyzer:
 
         # Check if DNS is listening on all interfaces
         interfaces = unbound.get("interfaces", [])
-        if "0.0.0.0" in interfaces or not interfaces:
+        if isinstance(interfaces, dict):
+            iface_list = list(interfaces.keys())
+        elif isinstance(interfaces, str):
+            iface_list = [i.strip() for i in interfaces.split(",") if i.strip()]
+        elif isinstance(interfaces, list):
+            iface_list = list(interfaces)
+        else:
+            iface_list = []
+        if "0.0.0.0" in iface_list or not iface_list:
             findings.append(DNSFinding(
                 severity="MEDIUM",
                 check="dns_interfaces",
                 issue="DNS Server hört auf allen Interfaces",
                 reason="DNS sollte nur auf internen Interfaces lauschen",
                 solution="Beschränke DNS auf spezifische interne Interfaces",
-                details={"current_interfaces": interfaces},
+                details={"current_interfaces": iface_list},
                 opnsense_path="Services > Unbound DNS > General > Network Interfaces"
             ))
 
         # Check Access Lists
         access_lists = unbound.get("acls", [])
-        if not access_lists:
+        has_acls = bool(access_lists) if not isinstance(access_lists, dict) else bool(
+            [a for a in access_lists.values() if isinstance(a, dict)]
+        )
+        if not has_acls:
             findings.append(DNSFinding(
                 severity="HIGH",
                 check="dns_acl",
@@ -282,21 +313,24 @@ class DNSAnalyzer:
                 opnsense_path="Services > Unbound DNS > Access Lists"
             ))
 
-        # Check cache size
-        cache_size = unbound.get("cache_size", "")
-        if not cache_size or int(cache_size or 0) < 50:
+        # Check cache size. msgcachesize is bytes per Unbound.
+        try:
+            cache_bytes = int(unbound.get("cache_size") or 0)
+        except (ValueError, TypeError):
+            cache_bytes = 0
+        if cache_bytes < _CACHE_MIN_BYTES:
             findings.append(DNSFinding(
                 severity="LOW",
                 check="dns_cache_size",
-                issue="DNS Cache zu klein oder nicht konfiguriert",
-                reason="Größerer Cache verbessert Performance und reduziert externe Anfragen",
-                solution="Erhöhe Cache-Größe auf mindestens 50MB",
-                details={"current": cache_size or "default"},
+                issue="Unbound msgcachesize zu klein",
+                reason="Groesserer Cache reduziert externe Anfragen und Latenz.",
+                solution=f"Cache auf mindestens {_CACHE_MIN_BYTES} Bytes (50 MiB) setzen.",
+                details={"current_bytes": cache_bytes, "recommended_bytes": _CACHE_MIN_BYTES},
                 opnsense_path="Services > Unbound DNS > Advanced > Cache Size"
             ))
 
         # Check prefetch
-        prefetch = unbound.get("prefetch", "0") == "1"
+        prefetch = truthy(unbound.get("prefetch"))
         if not prefetch:
             findings.append(DNSFinding(
                 severity="LOW",
@@ -311,58 +345,20 @@ class DNSAnalyzer:
         return findings
 
     def _test_dns_server(self, dns_server: str) -> list[DNSFinding]:
-        """Perform active security tests on DNS server"""
+        """Active reachability test for the resolver."""
         findings = []
-
-        # Test for open resolver
-        if not self._is_check_excepted("open_resolver"):
-            is_open = self._test_open_resolver(dns_server)
-            if is_open:
-                findings.append(DNSFinding(
-                    severity="CRITICAL",
-                    check="open_resolver",
-                    issue="DNS Server ist ein offener Resolver",
-                    reason="Offene DNS Resolver können für DDoS-Amplification-Attacken missbraucht werden",
-                    solution="Beschränke DNS-Zugriff auf lokale Netzwerke via Access Lists",
-                    details={"test": "open_resolver", "result": "vulnerable"}
-                ))
-
-        # Test DNS amplification potential
         amp_factor = self._test_amplification(dns_server)
         if amp_factor and amp_factor > 10:
             findings.append(DNSFinding(
                 severity="HIGH",
                 check="dns_amplification",
                 issue=f"DNS Amplification Faktor: {amp_factor}x",
-                reason="Hoher Amplification-Faktor ermöglicht effektive DDoS-Attacken",
-                solution="Aktiviere Response Rate Limiting (RRL) in Unbound",
-                details={"amplification_factor": amp_factor}
+                reason="Hoher Amplification-Faktor ermoeglicht effektive DDoS-Attacken.",
+                solution="Response Rate Limiting in Unbound aktivieren.",
+                details={"amplification_factor": amp_factor},
+                opnsense_path="Services > Unbound DNS > Advanced",
             ))
-
         return findings
-
-    def _test_open_resolver(self, dns_server: str) -> bool:
-        """Test if DNS server is an open resolver"""
-        try:
-            resolver = dns.resolver.Resolver()
-            resolver.nameservers = [dns_server]
-            resolver.timeout = 3
-            resolver.lifetime = 3
-
-            # Try to resolve an external domain
-            try:
-                resolver.resolve('google.com', 'A')
-                # If we got an answer, it might be an open resolver
-                # However, this is expected for internal queries
-                # A true open resolver test would need to be done from external IP
-                logger.info(f"DNS server {dns_server} resolved external query")
-                return False  # Can't determine from internal network
-            except Exception:
-                return False
-
-        except Exception as e:
-            logger.debug(f"Open resolver test failed: {e}")
-            return False
 
     def _test_amplification(self, dns_server: str) -> float:
         """Test DNS amplification factor"""

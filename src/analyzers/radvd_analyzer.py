@@ -1,11 +1,7 @@
-"""
-Router Advertisement checks.
-
-Reads /api/radvd/settings/searchEntry. Findings cover dangerous modes
-(managed without RA, assist without DHCPv6) and missing entries on
-LAN-style interfaces that have a global v6 prefix.
-"""
+"""Router Advertisement checks against /api/radvd/settings/searchEntry."""
 from dataclasses import dataclass, field
+
+from src.analyzers._utils import truthy
 
 
 @dataclass
@@ -36,7 +32,7 @@ class RadvdAnalyzer:
         for entry in radvd_entries or []:
             iface = entry.get("interface") or entry.get("%interface") or ""
             seen_ifaces.add(iface)
-            if str(entry.get("enabled", "0")) != "1":
+            if not truthy(entry.get("enabled")):
                 continue
             mode = (entry.get("ramode") or entry.get("mode") or "").lower()
             if mode and mode not in _VALID_MODES:
@@ -64,7 +60,9 @@ class RadvdAnalyzer:
             ident = (row.get("identifier") or "").lower()
             device = (row.get("device") or "").lower()
             link_type = (row.get("link_type") or "").lower()
-            if ident in {"wan", "lo0"}:
+            iftype = (row.get("type") or "").lower()
+            # Use type when present, fall back to identifier names.
+            if iftype == "wan" or ident in {"wan", "lo0"}:
                 continue
             if link_type in skip_link_types:
                 continue

@@ -1,9 +1,8 @@
-"""
-System Security Analyzer
-Analyzes OPNsense system security settings
-"""
+"""System security analyzer: SSH, WebGUI, IDS, Auth, Logging, Backups."""
 import logging
 from dataclasses import dataclass
+
+from src.analyzers._utils import truthy
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +53,10 @@ class SystemSecurityAnalyzer:
         if not ssh_config:
             return findings
 
-        ssh_enabled = ssh_config.get("enabled", "0") == "1"
+        ssh_enabled = truthy(ssh_config.get("enabled"))
 
         if ssh_enabled:
-            root_login = ssh_config.get("permitrootlogin", "0") == "1"
+            root_login = truthy(ssh_config.get("permitrootlogin"))
             if root_login:
                 findings.append(SystemSecurityFinding(
                     severity="HIGH",
@@ -78,7 +77,7 @@ class SystemSecurityAnalyzer:
                     ]
                 ))
 
-            password_auth = ssh_config.get("passwordauth", "0") == "1"
+            password_auth = truthy(ssh_config.get("passwordauth"))
             if password_auth:
                 findings.append(SystemSecurityFinding(
                     severity="MEDIUM",
@@ -151,8 +150,8 @@ class SystemSecurityAnalyzer:
         if not webgui_config:
             return findings
 
-        # Check HTTPS enforcement
-        protocol = webgui_config.get("protocol", "https")
+        # Check HTTPS enforcement. Default in code stays https only when API really returned https.
+        protocol = (webgui_config.get("protocol") or "").lower() or "https"
         if protocol != "https":
             findings.append(SystemSecurityFinding(
                 severity="CRITICAL",
@@ -173,9 +172,9 @@ class SystemSecurityAnalyzer:
                 ]
             ))
 
-        # Check HTTPS redirect
-        https_redirect = webgui_config.get("httpsredirect", "0") == "1"
-        if not https_redirect and protocol == "https":
+        # Check HTTPS redirect. Skip the redirect check entirely when WebGUI is on plain HTTP.
+        https_redirect = truthy(webgui_config.get("httpsredirect"))
+        if protocol == "https" and not https_redirect:
             findings.append(SystemSecurityFinding(
                 severity="MEDIUM",
                 category="Admin Interface",
@@ -217,27 +216,49 @@ class SystemSecurityAnalyzer:
                 ]
             ))
 
-        # Check session timeout
-        try:
-            session_timeout = int(webgui_config.get("session_timeout", "240") or 240)
-        except (ValueError, TypeError):
+        # Check session timeout. 0 means "no timeout" in OPNsense, that is the worst case.
+        raw_timeout = webgui_config.get("session_timeout")
+        if raw_timeout in (None, ""):
             session_timeout = 240
-        if session_timeout > 30:
+        else:
+            try:
+                session_timeout = int(raw_timeout)
+            except (ValueError, TypeError):
+                session_timeout = 240
+        if session_timeout == 0:
+            findings.append(SystemSecurityFinding(
+                severity="CRITICAL",
+                category="Admin Interface",
+                check="webgui_session_timeout_zero",
+                issue="WebGUI Session-Timeout deaktiviert (0)",
+                reason="Ein Wert von 0 deaktiviert den Auto-Logout komplett. Sessions bleiben unbegrenzt offen.",
+                solution="Session-Timeout auf 15-30 Minuten setzen.",
+                details={"session_timeout": 0},
+                opnsense_path="System > Settings > Administration > Web GUI",
+                current_value="Session-Timeout: Unbegrenzt",
+                recommended_value="Session-Timeout: 15-30 Minuten",
+                implementation_steps=[
+                    "System > Settings > Administration oeffnen",
+                    "'Session Timeout' auf 30 setzen",
+                    "Speichern",
+                ]
+            ))
+        elif session_timeout > 30:
             findings.append(SystemSecurityFinding(
                 severity="LOW",
                 category="Admin Interface",
                 check="webgui_session_timeout",
                 issue=f"Langes Session-Timeout ({session_timeout} Minuten)",
-                reason="Lange Sessions erhöhen das Risiko von Session-Hijacking bei unbeaufsichtigten Workstations",
-                solution="Session-Timeout auf 15-30 Minuten reduzieren",
+                reason="Lange Sessions erhoehen das Risiko von Session-Hijacking bei unbeaufsichtigten Workstations.",
+                solution="Session-Timeout auf 15-30 Minuten reduzieren.",
                 details={"session_timeout": session_timeout},
                 opnsense_path="System > Settings > Administration > Web GUI",
                 current_value=f"Session-Timeout: {session_timeout} Minuten",
                 recommended_value="Session-Timeout: 15-30 Minuten",
                 implementation_steps=[
-                    "System > Settings > Administration öffnen",
-                    "'Session Timeout' auf 30 setzen (oder 15 für höhere Sicherheit)",
-                    "Speichern"
+                    "System > Settings > Administration oeffnen",
+                    "'Session Timeout' auf 30 setzen",
+                    "Speichern",
                 ]
             ))
 
@@ -264,9 +285,9 @@ class SystemSecurityAnalyzer:
                 ]
             ))
 
-        # Check HSTS
-        hsts_enabled = webgui_config.get("hsts", "0") == "1"
-        if not hsts_enabled:
+        # Check HSTS. Only meaningful when HTTPS is on.
+        hsts_enabled = truthy(webgui_config.get("hsts"))
+        if protocol == "https" and not hsts_enabled:
             findings.append(SystemSecurityFinding(
                 severity="MEDIUM",
                 category="Admin Interface",
@@ -291,7 +312,7 @@ class SystemSecurityAnalyzer:
         """Analyze Intrusion Detection System configuration"""
         findings = []
 
-        ids_enabled = ids_config.get("enabled", "0") == "1"
+        ids_enabled = truthy(ids_config.get("enabled"))
 
         if not ids_enabled:
             findings.append(SystemSecurityFinding(
@@ -316,7 +337,7 @@ class SystemSecurityAnalyzer:
                 ]
             ))
         else:
-            ips_mode = ids_config.get("ips_mode", "0") == "1"
+            ips_mode = truthy(ids_config.get("ips_mode"))
             if not ips_mode:
                 findings.append(SystemSecurityFinding(
                     severity="LOW",
@@ -337,7 +358,7 @@ class SystemSecurityAnalyzer:
                 ))
 
             auto_update = ids_config.get("auto_update", "0")
-            has_auto_update = auto_update not in ("0", "", None)
+            has_auto_update = truthy(auto_update)
             if not has_auto_update:
                 findings.append(SystemSecurityFinding(
                     severity="MEDIUM",
@@ -439,8 +460,25 @@ class SystemSecurityAnalyzer:
                 ]
             ))
 
+        # Console menu protection. The boolean came in as "console_menu" (True when menu accessible).
+        # An accessible console menu plus physical access lets anyone reset the password without auth.
+        if general_config.get("console_menu") is True:
+            findings.append(SystemSecurityFinding(
+                severity="MEDIUM",
+                category="System",
+                check="console_menu_open",
+                issue="Console-Menue ohne Passwortschutz",
+                reason="OPNsense erlaubt mit offenem Console-Menue Resets und Shell-Zugriff ohne Authentifizierung.",
+                solution="Unter System > Settings > Administration die Option 'Password protect the console menu' aktivieren.",
+                details={"console_menu": True},
+                opnsense_path="System > Settings > Administration",
+                current_value="Console-Menue: ungesichert",
+                recommended_value="Console-Menue: passwortgeschuetzt",
+            ))
+
         # Check hostname/domain
-        if not hostname or hostname in ("OPNsense", "opnsense", "firewall"):
+        host_norm = (hostname or "").lower().strip()
+        if not host_norm or host_norm in ("opnsense", "firewall") or host_norm.startswith("opnsense-"):
             findings.append(SystemSecurityFinding(
                 severity="LOW",
                 category="System",
@@ -464,7 +502,7 @@ class SystemSecurityAnalyzer:
             return findings
 
         # Check for 2FA
-        totp_enabled = auth_config.get("totp_enabled", "0") == "1"
+        totp_enabled = truthy(auth_config.get("totp_enabled"))
         if not totp_enabled:
             findings.append(SystemSecurityFinding(
                 severity="MEDIUM",
@@ -486,29 +524,46 @@ class SystemSecurityAnalyzer:
                 ]
             ))
 
-        # Check lockout policy
+        # Check lockout policy. 0 means no lockout at all, that is the worst case.
         try:
             lockout_threshold = int(auth_config.get("lockout_threshold", 0) or 0)
         except (ValueError, TypeError):
             lockout_threshold = 0
-        if lockout_threshold == 0 or lockout_threshold > 5:
-            threshold_display = lockout_threshold if lockout_threshold > 0 else "Kein Limit"
+        if lockout_threshold == 0:
+            findings.append(SystemSecurityFinding(
+                severity="HIGH",
+                category="Authentication",
+                check="auth_lockout_missing",
+                issue="Keine Login-Sperre konfiguriert",
+                reason="Ohne Lockout koennen Angreifer unbegrenzt Passwoerter durchprobieren.",
+                solution="Account-Sperre nach 3-5 fehlgeschlagenen Versuchen konfigurieren.",
+                details={"lockout_threshold": 0},
+                opnsense_path="System > Settings > Administration",
+                current_value="Lockout-Threshold: Kein Limit",
+                recommended_value="Lockout-Threshold: 3-5 Versuche",
+                implementation_steps=[
+                    "System > Settings > Administration oeffnen",
+                    "'Max login attempts' auf 5 setzen",
+                    "Speichern",
+                ],
+            ))
+        elif lockout_threshold > 5:
             findings.append(SystemSecurityFinding(
                 severity="MEDIUM",
                 category="Authentication",
-                check="auth_lockout",
-                issue=f"Schwache Login-Sperre (aktuell: {threshold_display})",
-                reason="Ohne Lockout-Policy können Angreifer unbegrenzt Passwörter durchprobieren (Brute-Force)",
-                solution="Account-Sperre nach 3-5 fehlgeschlagenen Versuchen konfigurieren",
+                check="auth_lockout_high",
+                issue=f"Login-Sperre zu locker (Threshold {lockout_threshold})",
+                reason="Hoher Threshold gibt Brute-Force-Angreifern viele Versuche.",
+                solution="Account-Sperre auf 3-5 Versuche reduzieren.",
                 details={"lockout_threshold": lockout_threshold},
                 opnsense_path="System > Settings > Administration",
-                current_value=f"Lockout-Threshold: {threshold_display}",
+                current_value=f"Lockout-Threshold: {lockout_threshold}",
                 recommended_value="Lockout-Threshold: 3-5 Versuche",
                 implementation_steps=[
-                    "System > Settings > Administration öffnen",
+                    "System > Settings > Administration oeffnen",
                     "'Max login attempts' auf 5 setzen",
-                    "Speichern"
-                ]
+                    "Speichern",
+                ],
             ))
 
         return findings
@@ -553,7 +608,7 @@ class SystemSecurityAnalyzer:
                 ))
 
             # Check TLS auth
-            tls_auth = server.get("tls_auth", "0") == "1"
+            tls_auth = truthy(server.get("tls_auth"))
             if not tls_auth:
                 findings.append(SystemSecurityFinding(
                     severity="MEDIUM",
@@ -568,7 +623,7 @@ class SystemSecurityAnalyzer:
 
         # IPsec checks
         ipsec = vpn_config.get("ipsec", {})
-        if ipsec.get("enabled", "0") == "1":
+        if truthy(ipsec.get("enabled")):
             # Check Phase 1 proposals
             for p1 in ipsec.get("phase1", []):
                 enc = p1.get("encryption", "")
@@ -586,7 +641,7 @@ class SystemSecurityAnalyzer:
 
         # WireGuard checks
         wireguard = vpn_config.get("wireguard", {})
-        if wireguard.get("enabled", "0") == "1":
+        if truthy(wireguard.get("enabled")):
             for peer in wireguard.get("peers", []):
                 # Check if keepalive is set for NAT traversal
                 keepalive = peer.get("keepalive", 0)
@@ -657,7 +712,7 @@ class SystemSecurityAnalyzer:
                 category="Logging",
                 check="short_log_retention",
                 issue=f"Kurze Log-Aufbewahrung: {preserve_logs} Tage",
-                reason="Bei Security-Incidents werden oft Logs der letzten 30+ Tage benötigt. {preserve_logs} Tage reichen für forensische Analyse nicht aus",
+                reason=f"Bei Security-Incidents werden oft Logs der letzten 30+ Tage benoetigt. {preserve_logs} Tag(e) reichen nicht aus.",
                 solution="Log-Retention auf mindestens 30 Tage erhöhen",
                 details={"preserve_logs": preserve_logs},
                 opnsense_path="System > Settings > Logging",
@@ -773,19 +828,31 @@ class SystemSecurityAnalyzer:
             timeout = int(cp_config.get("timeout", 0) or 0)
         except (ValueError, TypeError):
             timeout = 0
-        if timeout == 0 or timeout > 480:
-            timeout_display = f"{timeout} Minuten" if timeout > 0 else "Unbegrenzt"
+        if timeout == 0:
+            findings.append(SystemSecurityFinding(
+                severity="MEDIUM",
+                category="Captive Portal",
+                check="cp_no_idle_timeout",
+                issue="Captive Portal Idle-Timeout deaktiviert",
+                reason="Mit idletimeout=0 werden inaktive Sessions nie beendet, fremde Geraete bleiben angemeldet.",
+                solution="Idletimeout auf 60-240 Minuten setzen.",
+                details={"timeout": 0},
+                opnsense_path="Services > Captive Portal",
+                current_value="Session-Timeout: Unbegrenzt",
+                recommended_value="Session-Timeout: 60-240 Minuten",
+            ))
+        elif timeout > 480:
             findings.append(SystemSecurityFinding(
                 severity="LOW",
                 category="Captive Portal",
                 check="cp_long_timeout",
-                issue=f"Captive Portal Session-Timeout: {timeout_display}",
-                reason="Zu lange oder unbegrenzte Sessions ermöglichen Missbrauch durch nicht-autorisierte Geräte",
-                solution="Session-Timeout auf 4-8 Stunden setzen",
+                issue=f"Captive Portal Session-Timeout zu lang ({timeout} Min.)",
+                reason="Zu lange Sessions ermoeglichen Missbrauch durch nicht-autorisierte Geraete.",
+                solution="Session-Timeout auf 60-480 Minuten setzen.",
                 details={"timeout": timeout},
                 opnsense_path="Services > Captive Portal",
-                current_value=f"Session-Timeout: {timeout_display}",
-                recommended_value="Session-Timeout: 240-480 Minuten"
+                current_value=f"Session-Timeout: {timeout} Minuten",
+                recommended_value="Session-Timeout: 60-480 Minuten",
             ))
 
         return findings

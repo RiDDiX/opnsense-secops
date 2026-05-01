@@ -5,6 +5,24 @@
 (function() {
     'use strict';
 
+    // Wrap fetch so every state-changing request mirrors the CSRF cookie into the header.
+    const _origFetch = window.fetch.bind(window);
+    function _readCookie(name) {
+        const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[$()*+?.\\^|]/g, '\\$&') + '=([^;]*)'));
+        return m ? decodeURIComponent(m[1]) : '';
+    }
+    window.fetch = function(input, init) {
+        init = init || {};
+        const method = (init.method || 'GET').toUpperCase();
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+            init.headers = Object.assign({}, init.headers || {});
+            const tok = _readCookie('secops_csrf');
+            if (tok) init.headers['X-CSRF-Token'] = tok;
+            init.credentials = init.credentials || 'same-origin';
+        }
+        return _origFetch(input, init);
+    };
+
     const API = {
         config: '/api/config',
         testConnection: '/api/connection/test',
@@ -328,7 +346,7 @@
         document.getElementById('scan-progress-text').textContent = progress + '%';
         
         const currentCheck = document.getElementById('scan-current-check');
-        currentCheck.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>${data.current_step || 'Verarbeite...'}</span>`;
+        currentCheck.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>${escapeHtml(data.current_step || 'Verarbeite...')}</span>`;
 
         // Update stats
         if (data.rules_checked !== undefined) {

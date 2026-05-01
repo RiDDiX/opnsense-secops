@@ -1,22 +1,141 @@
-"""
-OPNsense Security Auditor - Web Dashboard
-Flask-based web interface for managing scans and viewing results
-"""
+"""OPNsense Security Auditor: Flask dashboard."""
+import atexit
+import base64
+import hmac
 import json
 import logging
 import os
+import re
+import secrets as _secrets
 import threading
 import time
 from datetime import datetime, timedelta
 
-from flask import Flask, Response, jsonify, render_template, request, send_from_directory
+from cryptography.fernet import Fernet, InvalidToken
+from flask import Flask, Response, abort, jsonify, render_template, request, send_from_directory
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
 
 from src.config_loader import ConfigLoader
 from src.main import SecurityAuditor
 from src.opnsense_client import OPNsenseClient
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024  # 1 MiB request cap
+
+
+# ---------- security helpers ----------
+_REPORT_NAME_RE = re.compile(r"^security_audit_[A-Za-z0-9_\-]+\.json$")
+_MAX_REPORT_BYTES = 5 * 1024 * 1024  # 5 MiB
+_CSRF_COOKIE = "secops_csrf"
+_CSRF_HEADER = "X-CSRF-Token"
+
+# Methods that should require CSRF.
+_STATE_CHANGING = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _safe_report_path(filename: str) -> str:
+    """Resolve filename inside REPORTS_DIR. Refuse anything outside or non-matching."""
+    if not filename or not _REPORT_NAME_RE.fullmatch(filename):
+        abort(400)
+    base = os.path.realpath(REPORTS_DIR)
+    full = os.path.realpath(os.path.join(base, filename))
+    if not full.startswith(base + os.sep) and full != base:
+        abort(400)
+    return full
+
+
+def _read_json_bounded(path: str) -> dict:
+    if not os.path.exists(path):
+        abort(404)
+    if os.stat(path).st_size > _MAX_REPORT_BYTES:
+        abort(413)
+    with open(path) as f:
+        return json.load(f)
+
+
+def _get_or_make_csrf_token() -> str:
+    tok = request.cookies.get(_CSRF_COOKIE)
+    if not tok or len(tok) < 32:
+        tok = _secrets.token_urlsafe(32)
+    return tok
+
+
+def _csrf_check():
+    """Block state-changing requests without a matching token cookie/header."""
+    if request.method not in _STATE_CHANGING:
+        return None
+    cookie = request.cookies.get(_CSRF_COOKIE) or ""
+    header = request.headers.get(_CSRF_HEADER) or ""
+    if not cookie or not header or not hmac.compare_digest(cookie, header):
+        abort(403)
+    return None
+
+
+def _mask(value: str) -> str:
+    """Mask sensitive value for display, never return the raw value."""
+    if not value:
+        return ""
+    return "***"
+
+
+def _fernet() -> Fernet | None:
+    key = os.getenv("SECOPS_SECRET_KEY") or ""
+    if not key:
+        return None
+    try:
+        # Accept raw 32 byte b64 keys, or a passphrase that we hash to a key.
+        if len(key) >= 44 and key.endswith("="):
+            return Fernet(key.encode())
+        # Derive a stable Fernet key from any passphrase.
+        digest = hmac.new(b"secops-fernet-derive", key.encode(), "sha256").digest()
+        return Fernet(base64.urlsafe_b64encode(digest))
+    except Exception as e:
+        logger.warning(f"SECOPS_SECRET_KEY invalid, secrets stay plain: {e}")
+        return None
+
+
+def _encrypt(value: str) -> str:
+    if not value:
+        return value
+    f = _fernet()
+    if not f:
+        return value
+    return "fernet:" + f.encrypt(value.encode()).decode()
+
+
+def _decrypt(value: str) -> str:
+    if not value or not isinstance(value, str) or not value.startswith("fernet:"):
+        return value or ""
+    f = _fernet()
+    if not f:
+        return ""
+    try:
+        return f.decrypt(value.split(":", 1)[1].encode()).decode()
+    except InvalidToken:
+        logger.warning("Stored secret could not be decrypted")
+        return ""
+
+
+def _opnsense_client_from_config() -> OPNsenseClient | None:
+    """Build a client honouring saved config and the insecure_tls flag."""
+    cfg_path = os.path.join(CONFIG_DIR, "opnsense.json")
+    saved = {}
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path) as f:
+                saved = json.load(f)
+        except Exception:
+            saved = {}
+    host = saved.get("host") or os.getenv("OPNSENSE_HOST", "")
+    api_key = _decrypt(saved.get("api_key") or "") or os.getenv("OPNSENSE_API_KEY", "")
+    api_secret = _decrypt(saved.get("api_secret") or "") or os.getenv("OPNSENSE_API_SECRET", "")
+    insecure_tls = bool(saved.get("insecure_tls") or
+                        str(os.getenv("OPNSENSE_INSECURE_TLS", "")).lower() in ("1", "true", "yes", "on"))
+    if not host or not api_key or not api_secret:
+        return None
+    return OPNsenseClient(host=host, api_key=api_key, api_secret=api_secret, verify_ssl=not insecure_tls)
+# ---------- /security helpers ----------
 
 # Global scan state manager
 class ScanManager:
@@ -129,7 +248,39 @@ class ScanManager:
             return self.cancel_requested
 
 scan_manager = ScanManager()
-CORS(app)
+# CORS only for same-origin reads. State-changing endpoints rely on the CSRF token.
+CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": [], "methods": ["GET"]}})
+
+
+@app.before_request
+def _enforce_csrf():
+    if request.path == "/" or request.path.startswith("/static/"):
+        return None
+    return _csrf_check()
+
+
+@app.after_request
+def _set_csrf_cookie(resp):
+    tok = _get_or_make_csrf_token()
+    resp.set_cookie(
+        _CSRF_COOKIE,
+        tok,
+        httponly=False,  # JS reads it, mirrors it back in the header
+        samesite="Strict",
+        secure=request.is_secure,
+        max_age=60 * 60 * 24,
+    )
+    return resp
+
+
+@app.errorhandler(413)
+def _too_large(_e):
+    return jsonify({"success": False, "error": "Request too large"}), 413
+
+
+@app.route("/api/health", methods=["GET"])
+def health():
+    return jsonify({"success": True, "status": "ok"}), 200
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -157,24 +308,25 @@ def index():
 
 
 def load_persistent_config():
-    """Load persistent configuration from file, set environment variables"""
+    """Load persistent configuration from file, set environment variables."""
     config_file = os.path.join(CONFIG_DIR, 'opnsense.json')
     if os.path.exists(config_file):
         try:
             with open(config_file) as f:
                 config = json.load(f)
-            # Set environment variables from saved config
             if config.get('host'):
                 os.environ['OPNSENSE_HOST'] = config['host']
             if config.get('api_key'):
-                os.environ['OPNSENSE_API_KEY'] = config['api_key']
+                os.environ['OPNSENSE_API_KEY'] = _decrypt(config['api_key'])
             if config.get('api_secret'):
-                os.environ['OPNSENSE_API_SECRET'] = config['api_secret']
+                os.environ['OPNSENSE_API_SECRET'] = _decrypt(config['api_secret'])
             if config.get('scan_network'):
                 os.environ['SCAN_NETWORK'] = config['scan_network']
             if config.get('additional_networks'):
                 os.environ['ADDITIONAL_NETWORKS'] = config['additional_networks']
-            logger.info("Loaded persistent configuration from opnsense.json")
+            if 'insecure_tls' in config:
+                os.environ['OPNSENSE_INSECURE_TLS'] = '1' if config.get('insecure_tls') else '0'
+            logger.info("Loaded persistent configuration")
             return config
         except Exception as e:
             logger.error(f"Failed to load persistent config: {e}")
@@ -198,12 +350,19 @@ def get_config():
             with open(config_file) as f:
                 saved_config = json.load(f)
 
+        # Never return the raw secrets to the browser. Only signal whether they exist.
+        api_key_set = bool(saved_config.get('api_key') or os.getenv('OPNSENSE_API_KEY', ''))
+        api_secret_set = bool(saved_config.get('api_secret') or os.getenv('OPNSENSE_API_SECRET', ''))
         opnsense_config = {
             'host': saved_config.get('host') or os.getenv('OPNSENSE_HOST', ''),
-            'api_key': saved_config.get('api_key') or os.getenv('OPNSENSE_API_KEY', ''),
-            'api_secret': saved_config.get('api_secret') or os.getenv('OPNSENSE_API_SECRET', ''),
+            'api_key': _mask('x') if api_key_set else '',
+            'api_secret': _mask('x') if api_secret_set else '',
+            'api_key_set': api_key_set,
+            'api_secret_set': api_secret_set,
             'scan_network': saved_config.get('scan_network') or os.getenv('SCAN_NETWORK', '192.168.1.0/24'),
-            'additional_networks': saved_config.get('additional_networks') or os.getenv('ADDITIONAL_NETWORKS', '')
+            'additional_networks': saved_config.get('additional_networks') or os.getenv('ADDITIONAL_NETWORKS', ''),
+            'insecure_tls': bool(saved_config.get('insecure_tls') or
+                                 str(os.getenv('OPNSENSE_INSECURE_TLS', '')).lower() in ('1', 'true', 'yes', 'on')),
         }
 
         return jsonify({
@@ -220,27 +379,58 @@ def get_config():
 
 @app.route('/api/config', methods=['POST'])
 def save_config():
-    """Save configuration persistently"""
+    """Save configuration persistently. Encrypts secrets when SECOPS_SECRET_KEY is set."""
+    # Trigger size enforcement before the broad except below.
+    if request.content_length and request.content_length > app.config["MAX_CONTENT_LENGTH"]:
+        abort(413)
     try:
-        data = request.json
-        opnsense_data = data.get('opnsense', {})
-
-        # Save OPNsense config to persistent file
+        data = request.get_json(silent=True) or {}
+        opnsense_data = data.get('opnsense', {}) or {}
         config_file = os.path.join(CONFIG_DIR, 'opnsense.json')
-        with open(config_file, 'w') as f:
-            json.dump(opnsense_data, f, indent=2)
 
-        # Update environment variables immediately
-        if opnsense_data.get('host'):
-            os.environ['OPNSENSE_HOST'] = opnsense_data['host']
-        if opnsense_data.get('api_key'):
-            os.environ['OPNSENSE_API_KEY'] = opnsense_data['api_key']
-        if opnsense_data.get('api_secret'):
-            os.environ['OPNSENSE_API_SECRET'] = opnsense_data['api_secret']
-        if opnsense_data.get('scan_network'):
-            os.environ['SCAN_NETWORK'] = opnsense_data['scan_network']
-        if opnsense_data.get('additional_networks'):
-            os.environ['ADDITIONAL_NETWORKS'] = opnsense_data['additional_networks']
+        # Merge with existing so the masked '***' the UI sends back does not wipe the secret.
+        existing = {}
+        if os.path.exists(config_file):
+            try:
+                with open(config_file) as f:
+                    existing = json.load(f)
+            except Exception:
+                existing = {}
+
+        def _take(field: str) -> str:
+            new = opnsense_data.get(field, None)
+            if new is None or new == '' or new == '***':
+                return existing.get(field, '')
+            return new
+
+        merged = {
+            'host': _take('host'),
+            'api_key': _encrypt(_take('api_key')) if _take('api_key') else '',
+            'api_secret': _encrypt(_take('api_secret')) if _take('api_secret') else '',
+            'scan_network': _take('scan_network'),
+            'additional_networks': _take('additional_networks'),
+            'insecure_tls': bool(opnsense_data.get('insecure_tls', existing.get('insecure_tls', False))),
+        }
+
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(config_file, 'w') as f:
+            json.dump(merged, f, indent=2)
+        try:
+            os.chmod(config_file, 0o600)
+        except OSError:
+            pass
+
+        # Mirror plain values into env so SecurityAuditor can read them.
+        os.environ['OPNSENSE_HOST'] = merged['host'] or ''
+        if merged['api_key']:
+            os.environ['OPNSENSE_API_KEY'] = _decrypt(merged['api_key'])
+        if merged['api_secret']:
+            os.environ['OPNSENSE_API_SECRET'] = _decrypt(merged['api_secret'])
+        if merged['scan_network']:
+            os.environ['SCAN_NETWORK'] = merged['scan_network']
+        if merged['additional_networks']:
+            os.environ['ADDITIONAL_NETWORKS'] = merged['additional_networks']
+        os.environ['OPNSENSE_INSECURE_TLS'] = '1' if merged['insecure_tls'] else '0'
 
         # Save exceptions
         if 'exceptions' in data:
@@ -251,9 +441,11 @@ def save_config():
 
         logger.info("Configuration saved persistently")
         return jsonify({'success': True, 'message': 'Configuration saved'})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to save config: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Save failed'}), 500
 
 
 @app.route('/api/scan/start', methods=['POST'])
@@ -440,45 +632,37 @@ def get_scan_history():
 
 @app.route('/api/reports/<filename>', methods=['GET'])
 def get_report(filename):
-    """Get a specific report"""
+    """Get a specific report. Filename is whitelist-validated."""
+    path = _safe_report_path(filename)
     try:
-        filepath = os.path.join(REPORTS_DIR, filename)
-
-        if not os.path.exists(filepath):
-            return jsonify({'success': False, 'error': 'Report not found'}), 404
-
-        with open(filepath) as f:
-            report_data = json.load(f)
-
-        return jsonify({
-            'success': True,
-            'report': report_data
-        })
+        report_data = _read_json_bounded(path)
+        return jsonify({'success': True, 'report': report_data})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get report: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Report read failed'}), 500
 
 
 @app.route('/api/reports/<filename>/download', methods=['GET'])
 def download_report(filename):
-    """Download a report file"""
+    """Download a report file. Filename is whitelist-validated."""
+    _safe_report_path(filename)
     try:
         return send_from_directory(REPORTS_DIR, filename, as_attachment=True)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to download report: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Download failed'}), 500
 
 
 @app.route('/api/reports/<filename>/html', methods=['GET'])
 def download_html_report(filename):
-    """Generate and download HTML report from JSON report"""
+    """Generate and download HTML report from JSON report."""
+    json_path = _safe_report_path(filename)
     try:
-        json_path = os.path.join(REPORTS_DIR, filename)
-        if not os.path.exists(json_path):
-            return jsonify({'success': False, 'error': 'Report not found'}), 404
-
-        with open(json_path) as f:
-            report_data = json.load(f)
+        report_data = _read_json_bounded(json_path)
 
         from src.report_generator import ReportGenerator
         generator = ReportGenerator()
@@ -607,6 +791,17 @@ def _schedule_next_run():
     _schedule_timer.daemon = True
     _schedule_timer.start()
     logger.info(f"Next scheduled scan in {schedule.get('interval_hours', 24)}h at {next_run}")
+
+
+@atexit.register
+def _cancel_schedule_timer_on_exit():
+    global _schedule_timer
+    if _schedule_timer:
+        try:
+            _schedule_timer.cancel()
+        except Exception:
+            pass
+        _schedule_timer = None
 
 
 @app.route('/api/schedule', methods=['GET'])
@@ -951,7 +1146,9 @@ def get_available_networks():
                 'error': 'OPNsense credentials not configured'
             }), 400
 
-        client = OPNsenseClient(host, api_key, api_secret)
+        client = _opnsense_client_from_config()
+        if client is None:
+            return jsonify({'success': False, 'error': 'OPNsense credentials not configured'}), 400
 
         # Get interfaces
         interfaces = client.get_interfaces()
@@ -1059,7 +1256,9 @@ def fetch_networks_from_opnsense():
                 'error': 'OPNsense credentials not configured. Please save API settings first.'
             }), 400
 
-        client = OPNsenseClient(host, api_key, api_secret)
+        client = _opnsense_client_from_config()
+        if client is None:
+            return jsonify({'success': False, 'error': 'OPNsense credentials not configured'}), 400
 
         # Get interfaces and VLANs
         interfaces = client.get_interfaces()
@@ -1315,10 +1514,14 @@ def start_internal_scan():
                 api_key = os.getenv('OPNSENSE_API_KEY')
                 api_secret = os.getenv('OPNSENSE_API_SECRET')
                 if all([host, api_key, api_secret]):
-                    internal_scan_log('info', '📡 Fetching DHCP leases and ARP table from OPNsense...')
-                    client = OPNsenseClient(host, api_key, api_secret)
-                    dhcp_leases = client.get_dhcp_leases()
-                    arp_table = client.get_arp_table()
+                    internal_scan_log('info', 'Fetching DHCP leases and ARP table from OPNsense...')
+                    client = _opnsense_client_from_config()
+                    if client is None:
+                        internal_scan_log('warning', 'OPNsense credentials not configured, skipping')
+                        client = None
+                    if client is not None:
+                        dhcp_leases = client.get_dhcp_leases()
+                        arp_table = client.get_arp_table()
                     internal_scan_log('success', f'✅ Got {len(dhcp_leases)} DHCP leases, {len(arp_table)} ARP entries')
             except Exception as e:
                 internal_scan_log('warning', f'⚠️ Could not fetch DHCP/ARP data: {str(e)[:50]}')
@@ -1625,7 +1828,9 @@ def test_connection():
         if not all([host, api_key, api_secret]):
             return jsonify({'success': False, 'error': 'Alle Felder müssen ausgefüllt sein'})
 
-        client = OPNsenseClient(host, api_key, api_secret, verify_ssl=False)
+        client = _opnsense_client_from_config()
+        if client is None:
+            return jsonify({'success': False, 'error': 'OPNsense credentials not configured'}), 400
 
         if client.test_connection():
             # Get version info
@@ -1727,13 +1932,8 @@ def calculate_category_scores(results):
 
 
 def _build_opn_client():
-    """Construct an OPNsense client from current env."""
-    host = os.getenv("OPNSENSE_HOST")
-    key = os.getenv("OPNSENSE_API_KEY")
-    secret = os.getenv("OPNSENSE_API_SECRET")
-    if not (host and key and secret):
-        return None
-    return OPNsenseClient(host=host, api_key=key, api_secret=secret, verify_ssl=False)
+    """Construct an OPNsense client honouring saved insecure_tls flag."""
+    return _opnsense_client_from_config()
 
 
 def _find_finding_in_results(finding_id: str):
@@ -1808,7 +2008,9 @@ def get_raw_data():
         if not all([host, api_key, api_secret]):
             return jsonify({'success': False, 'error': 'OPNsense nicht konfiguriert'})
 
-        client = OPNsenseClient(host, api_key, api_secret, verify_ssl=False)
+        client = _opnsense_client_from_config()
+        if client is None:
+            return jsonify({'success': False, 'error': 'OPNsense credentials not configured'}), 400
 
         raw_data = {
             'firewall_rules': client.get_firewall_rules(),

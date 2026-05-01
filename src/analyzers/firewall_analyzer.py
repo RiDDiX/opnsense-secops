@@ -1,9 +1,8 @@
-"""
-Firewall Rule Analyzer
-Analyzes firewall rules for security issues
-"""
+"""Firewall rule analyzer."""
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from src.analyzers._utils import is_any, is_rfc1918, truthy
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +17,10 @@ class FirewallFinding:
     reason: str
     solution: str
     rule_details: dict
-    interface: str = ""  # Target interface for the fix
-    implementation_steps: list[str] = None  # Step-by-step implementation guide
-    opnsense_path: str = ""  # OPNsense menu path to fix
-
-    def __post_init__(self):
-        if self.implementation_steps is None:
-            self.implementation_steps = []
+    interface: str = ""
+    implementation_steps: list[str] = field(default_factory=list)
+    opnsense_path: str = ""
+    suggested_rule: dict | None = None
 
 
 class FirewallAnalyzer:
@@ -94,11 +90,12 @@ class FirewallAnalyzer:
             entries = {e.strip() for e in icmp6.split(",") if e.strip()}
             unexpected = entries - allowed_total
             if unexpected:
+                ordered = sorted(unexpected, key=lambda x: int(x) if str(x).isdigit() else 0)
                 findings.append(FirewallFinding(
                     severity="MEDIUM",
                     rule_id=rule.get("uuid", ""),
                     rule_description=rule.get("description", "ICMPv6 with non-default types"),
-                    issue=f"ICMPv6 Pass Regel mit unueblichen Typen: {sorted(unexpected)}",
+                    issue=f"ICMPv6 Pass Regel mit unueblichen Typen: {ordered}",
                     reason=(
                         "Diese Typen liegen ausserhalb der Default Whitelist von OPNsense. "
                         "Bewusste Konfiguration moeglich, sonst Risiko."
@@ -120,7 +117,7 @@ class FirewallAnalyzer:
         findings = []
 
         for rule in rules:
-            if not rule.get("enabled", "0") == "1":
+            if not truthy(rule.get("enabled")):
                 continue
 
             iface = rule.get("interface", "unknown")
@@ -221,7 +218,7 @@ class FirewallAnalyzer:
         findings = []
 
         for rule in rules:
-            if not rule.get("enabled", "0") == "1":
+            if not truthy(rule.get("enabled")):
                 continue
 
             rule_uuid = rule.get("uuid", "unknown")
@@ -280,75 +277,51 @@ class FirewallAnalyzer:
         return findings
 
     def _is_any_to_any(self, rule: dict) -> bool:
-        """Check if rule is a dangerous any-to-any rule.
+        """Pass any to any only counts as dangerous on WAN or floating."""
+        src = (rule.get("source_net") or "").lower()
+        dst = (rule.get("destination_net") or "").lower()
+        interface = (rule.get("interface") or "").lower()
+        action = (rule.get("action") or "").lower()
+        dst_port = (rule.get("destination_port") or "").strip()
+        protocol = (rule.get("protocol") or "").lower()
 
-        Rules on internal interfaces (LAN, VLAN, VPN, OpenVPN, WireGuard, IPsec)
-        with src=any dst=any are standard outbound access rules and NOT flagged.
-        Only WAN or floating rules with any-to-any are truly dangerous.
-
-        Rules with specific destination_port and/or protocol are NOT any-to-any
-        because they restrict traffic to a specific service.
-        """
-        src = rule.get("source_net", "").lower()
-        dst = rule.get("destination_net", "").lower()
-        interface = rule.get("interface", "").lower()
-        action = rule.get("action", "").lower()
-        dst_port = rule.get("destination_port", "").strip()
-        protocol = rule.get("protocol", "").lower()
-
-        any_values = ["any", "", "0.0.0.0/0", "::/0"]
-
-        if src not in any_values or dst not in any_values:
+        if not is_any(src) or not is_any(dst):
             return False
-
-        # Only pass rules are a concern
         if action != "pass":
             return False
-
-        # If a specific destination port is set, this is a targeted rule, not any-to-any
-        if dst_port and dst_port not in any_values:
+        if dst_port and not is_any(dst_port):
+            return False
+        if protocol and protocol != "any":
             return False
 
-        # If a specific protocol is set (not 'any'), this is more targeted
-        if protocol and protocol not in ["any", ""]:
-            return False
-
-        # Internal/VPN interfaces: src=any dst=any is normal outbound access
-        internal_patterns = [
+        internal_patterns = (
             "lan", "vlan", "opt", "openvpn", "ovpn", "wireguard", "wg",
-            "ipsec", "vpn", "tailscale", "zerotier", "tun", "tap"
-        ]
+            "ipsec", "vpn", "tailscale", "zerotier", "tun", "tap",
+        )
         for pattern in internal_patterns:
             if pattern in interface:
                 return False
-
-        # WAN or floating/unknown interface with any-to-any is dangerous
         return True
 
     def _is_insecure_wan_rule(self, rule: dict) -> bool:
-        """Check if rule allows insecure WAN access.
+        """Inbound WAN pass without port restriction is dangerous."""
+        interface = (rule.get("interface") or "").lower()
+        direction = (rule.get("direction") or "").lower()
+        action = (rule.get("action") or "").lower()
+        dst = (rule.get("destination_net") or "").lower()
+        dst_port = (rule.get("destination_port") or "").strip()
 
-        Only flags rules without port restrictions. Rules with specific
-        destination_port are targeted forwards, not unrestricted WAN access.
-        """
-        interface = rule.get("interface", "").lower()
-        direction = rule.get("direction", "").lower()
-        action = rule.get("action", "").lower()
-        dst = rule.get("destination_net", "").lower()
-        dst_port = rule.get("destination_port", "").strip()
-
-        # Check if it's an incoming WAN rule that allows traffic
-        is_wan = "wan" in interface
-        is_incoming = direction == "in"
-        is_allow = action == "pass"
-        is_broad_destination = dst in ["any", "", "0.0.0.0/0"]
-        has_port_restriction = dst_port and dst_port not in ["any", ""]
-
-        # Rules with specific port restrictions are targeted, not unrestricted
-        if has_port_restriction:
+        if "wan" not in interface:
             return False
-
-        return is_wan and is_incoming and is_allow and is_broad_destination
+        if direction != "in":
+            return False
+        if action != "pass":
+            return False
+        if not is_any(dst):
+            return False
+        if dst_port and not is_any(dst_port):
+            return False
+        return True
 
     def _should_have_logging(self, rule: dict) -> bool:
         """Determine if rule should have logging enabled"""
@@ -359,8 +332,7 @@ class FirewallAnalyzer:
         return "wan" in interface or action == "block"
 
     def _has_logging(self, rule: dict) -> bool:
-        """Check if rule has logging enabled"""
-        return rule.get("log", "0") == "1"
+        return truthy(rule.get("log"))
 
     def _is_overly_permissive(self, rule: dict) -> bool:
         """Check if rule is overly permissive with protocols.
@@ -401,71 +373,85 @@ class FirewallAnalyzer:
         return False
 
     def _has_unrestricted_source(self, rule: dict) -> bool:
-        """Check if NAT rule has unrestricted source"""
-        # Check both normalized and raw field names
-        src = rule.get("source", rule.get("source_net", "")).lower()
-        return src in ["any", "", "0.0.0.0/0", "::/0"]
+        src = rule.get("source") or rule.get("source_net") or ""
+        return is_any(src)
 
     def _analyze_security_policies(self, rules: list[dict]) -> list[FirewallFinding]:
-        """Analyze overall security policies"""
+        """Default deny, bogon, RFC1918 on WAN, anti-spoof."""
         findings = []
 
-        # Check for default deny policy
-        has_default_deny = False
+        # Group enabled rules per interface for ordering checks.
+        per_iface: dict[str, list[dict]] = {}
+        for rule in rules:
+            if not truthy(rule.get("enabled")):
+                continue
+            iface = (rule.get("interface") or "").lower() or "floating"
+            per_iface.setdefault(iface, []).append(rule)
+
+        has_default_deny_last = False
+        for _iface, iface_rules in per_iface.items():
+            if not iface_rules:
+                continue
+            last = iface_rules[-1]
+            if (last.get("action") or "").lower() == "block" and is_any(last.get("source_net")) and is_any(last.get("destination_net")):
+                has_default_deny_last = True
+                break
+
         has_bogon_block = False
         has_rfc1918_block_wan = False
         has_anti_spoofing = False
 
         for rule in rules:
-            if not rule.get("enabled", "0") == "1":
+            if not truthy(rule.get("enabled")):
                 continue
+            interface = (rule.get("interface") or "").lower()
+            action = (rule.get("action") or "").lower()
+            src = (rule.get("source_net") or "")
+            description = (rule.get("description") or "").lower()
 
-            interface = rule.get("interface", "").lower()
-            action = rule.get("action", "").lower()
-            src = rule.get("source_net", "").lower()
-            dst = rule.get("destination_net", "").lower()
-            description = rule.get("description", "").lower()
-
-            # Check for default deny (last rule blocking all)
-            if action == "block" and src in ["any", ""] and dst in ["any", ""]:
-                has_default_deny = True
-
-            # Check for bogon blocking on WAN
             if "wan" in interface and action == "block":
-                if "bogon" in description or "bogon" in src:
+                src_lc = src.lower()
+                if "bogon" in description or "bogon" in src_lc:
                     has_bogon_block = True
-
-            # Check for RFC1918 blocking on WAN incoming
-            if "wan" in interface and action == "block":
-                if any(net in src for net in ["10.0.0.0", "172.16.0.0", "192.168.0.0", "rfc1918", "private"]):
+                if "rfc1918" in src_lc or "private" in src_lc or is_rfc1918(src):
                     has_rfc1918_block_wan = True
 
-            # Check for anti-spoofing rules
-            if "spoof" in description or "anti-spoof" in description:
+            if "spoof" in description:
                 has_anti_spoofing = True
+
+        has_default_deny = has_default_deny_last
 
         if not has_default_deny:
             findings.append(FirewallFinding(
                 severity="HIGH",
                 rule_id="policy_default_deny",
                 rule_description="Default Deny Policy",
-                issue="No default deny policy detected",
-                reason="Without a default deny policy, unmatched traffic may be allowed",
-                solution="Add a final rule on each interface that blocks all unmatched traffic",
+                issue="Keine explizite Default-Deny Regel als letzte Regel auf einem Interface",
+                reason="OPNsense hat zwar einen impliziten Default-Deny, ohne explizite Block-Regel werden Hits nicht geloggt.",
+                solution="Letzte Regel pro Interface auf Block + Log setzen.",
                 rule_details={"recommendation": "Block any to any as last rule"},
                 interface="ALL",
                 opnsense_path="Firewall > Rules > [Interface]",
                 implementation_steps=[
-                    "1. Gehe zu Firewall > Rules > [Interface] (z.B. LAN, WAN)",
-                    "2. Klicke '+' um neue Regel am ENDE hinzuzufügen",
-                    "3. Setze 'Action' auf 'Block'",
-                    "4. Setze 'Source' auf 'any'",
-                    "5. Setze 'Destination' auf 'any'",
-                    "6. Aktiviere 'Log packets'",
-                    "7. Beschreibung: 'Default Deny - Block All'",
-                    "8. Speichern und 'Apply Changes'",
-                    "WICHTIG: Regel muss LETZTE Regel pro Interface sein!"
-                ]
+                    "1. Firewall > Rules > [Interface] oeffnen.",
+                    "2. Neue Regel als letzte Regel anlegen.",
+                    "3. Action Block, Source any, Destination any.",
+                    "4. Log packets aktivieren.",
+                    "5. Apply Changes.",
+                ],
+                suggested_rule={"rule": {
+                    "enabled": "1",
+                    "action": "block",
+                    "direction": "in",
+                    "ipprotocol": "inet46",
+                    "protocol": "any",
+                    "interface": "lan",
+                    "source_net": "any",
+                    "destination_net": "any",
+                    "log": "1",
+                    "quick": "1",
+                    "description": "secops: explicit default deny",
+                }},
             ))
 
         if not has_bogon_block:
@@ -473,22 +459,17 @@ class FirewallAnalyzer:
                 severity="MEDIUM",
                 rule_id="policy_bogon_block",
                 rule_description="Bogon Blocking",
-                issue="No bogon blocking on WAN interface",
-                reason="Bogon addresses (unallocated IP ranges) should be blocked on WAN",
-                solution="Enable bogon blocking in Firewall > Settings or add explicit bogon block rules",
+                issue="Keine Bogon-Block-Regel auf WAN",
+                reason="Bogon-Bereiche (unallokierte IP-Praefixe) sollten am WAN blockiert werden.",
+                solution="Firewall > Settings > Advanced: 'Block bogon networks' aktivieren.",
                 rule_details={"recommendation": "Block bogon networks on WAN"},
                 interface="WAN",
                 opnsense_path="Firewall > Settings > Advanced",
                 implementation_steps=[
-                    "1. Gehe zu Firewall > Settings > Advanced",
-                    "2. Finde Abschnitt 'Bogon Networks'",
-                    "3. Aktiviere 'Block bogon networks'",
-                    "4. Speichern",
-                    "ODER manuell:",
-                    "1. Gehe zu Firewall > Rules > WAN",
-                    "2. Erstelle Block-Regel ganz oben",
-                    "3. Source: 'Bogon networks' aus Dropdown"
-                ]
+                    "1. Firewall > Settings > Advanced oeffnen.",
+                    "2. 'Block bogon networks' aktivieren.",
+                    "3. Speichern.",
+                ],
             ))
 
         if not has_rfc1918_block_wan:
@@ -496,24 +477,30 @@ class FirewallAnalyzer:
                 severity="HIGH",
                 rule_id="policy_rfc1918_wan",
                 rule_description="RFC1918 on WAN",
-                issue="No RFC1918 (private) address blocking on WAN incoming",
-                reason="Private IP addresses should never arrive from WAN - indicates spoofing",
-                solution="Block incoming traffic from 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 on WAN",
+                issue="Keine RFC1918-Block-Regel auf WAN inbound",
+                reason="Private IP-Adressen am WAN inbound deuten auf Spoofing oder Misconfig auf der Provider-Seite hin.",
+                solution="Firewall > Settings > Advanced: 'Block private networks' aktivieren.",
                 rule_details={"recommendation": "Block private networks on WAN inbound"},
                 interface="WAN",
                 opnsense_path="Firewall > Settings > Advanced",
                 implementation_steps=[
-                    "1. Gehe zu Firewall > Settings > Advanced",
-                    "2. Finde Abschnitt 'Private Networks'",
-                    "3. Aktiviere 'Block private networks'",
-                    "4. Speichern",
-                    "ODER manuell:",
-                    "1. Gehe zu Firewall > Rules > WAN",
-                    "2. Erstelle 3 Block-Regeln ganz oben:",
-                    "   - Block Source: 10.0.0.0/8",
-                    "   - Block Source: 172.16.0.0/12",
-                    "   - Block Source: 192.168.0.0/16"
-                ]
+                    "1. Firewall > Settings > Advanced oeffnen.",
+                    "2. 'Block private networks' aktivieren.",
+                    "3. Speichern.",
+                ],
+                suggested_rule={"rule": {
+                    "enabled": "1",
+                    "action": "block",
+                    "direction": "in",
+                    "ipprotocol": "inet",
+                    "protocol": "any",
+                    "interface": "wan",
+                    "source_net": "10.0.0.0/8",
+                    "destination_net": "any",
+                    "log": "1",
+                    "quick": "1",
+                    "description": "secops: block RFC1918 source on WAN inbound (10/8)",
+                }},
             ))
 
         if not has_anti_spoofing:
@@ -546,7 +533,7 @@ class FirewallAnalyzer:
         ipv6_any_allow = False
 
         for rule in rules:
-            if not rule.get("enabled", "0") == "1":
+            if not truthy(rule.get("enabled")):
                 continue
 
             # Check if rule applies to IPv6
@@ -593,7 +580,7 @@ class FirewallAnalyzer:
         # Group rules by interface
         interface_rules = {}
         for rule in rules:
-            if not rule.get("enabled", "0") == "1":
+            if not truthy(rule.get("enabled")):
                 continue
             interface = rule.get("interface", "unknown")
             if interface not in interface_rules:

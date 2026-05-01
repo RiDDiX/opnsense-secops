@@ -1,12 +1,15 @@
-"""
-VLAN Analyzer
-Analyzes VLAN configuration and segmentation for security issues
-"""
+"""VLAN segmentation analyzer."""
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
 
+from src.analyzers._utils import is_rfc1918, truthy
+
 logger = logging.getLogger(__name__)
+
+
+def _vlan_tag(v: dict) -> str:
+    return str(v.get("tag", "") or "").strip()
 
 
 @dataclass
@@ -71,36 +74,35 @@ class VLANAnalyzer:
         vlan_connections = defaultdict(set)
 
         for rule in firewall_rules:
-            if rule.get("enabled") != "1" or rule.get("action") != "pass":
+            if not truthy(rule.get("enabled")) or rule.get("action") != "pass":
                 continue
 
-            src_interface = rule.get("interface", "")
+            src_interfaces = {i for i in (rule.get("interface", "") or "").split(",") if i}
             dst_net = rule.get("destination_net", "")
 
-            # Track which VLANs can reach which destinations
             for vlan in vlans:
                 vlan_interface = vlan.get("if", "")
-                if src_interface and vlan_interface in src_interface:
-                    vlan_connections[vlan.get("tag")].add(dst_net)
+                if vlan_interface and vlan_interface in src_interfaces:
+                    vlan_connections[_vlan_tag(vlan)].add(dst_net)
 
-        # Check for overly permissive inter-VLAN routing
+        # Check for overly permissive inter-VLAN routing.
+        max_dest = self.vlan_security.get("max_destinations_per_vlan", 8)
         for vlan in vlans:
-            vlan_tag = vlan.get("tag")
+            vlan_tag = _vlan_tag(vlan)
             vlan_desc = vlan.get("descr", f"VLAN {vlan_tag}")
 
             connections = vlan_connections.get(vlan_tag, set())
 
-            # Check if VLAN can reach "any" or too many destinations
-            if "any" in connections or len(connections) > 5:
+            if "any" in connections or len(connections) > max_dest:
                 if not self._is_vlan_exception_allowed("vlan_isolation", vlan_tag):
                     findings.append(VLANFinding(
                         severity="HIGH",
-                        vlan_id=vlan_tag,
+                        vlan_id=int(vlan_tag) if vlan_tag.isdigit() else 0,
                         vlan_name=vlan_desc,
                         issue="VLAN hat zu weitreichende Routing-Berechtigungen",
-                        reason="VLANs sollten nur mit notwendigen Netzwerken kommunizieren können",
-                        solution=f"Beschränke Inter-VLAN Routing für VLAN {vlan_tag} auf spezifische benötigte Netzwerke",
-                        details={"allowed_destinations": list(connections)[:10]}
+                        reason="VLANs sollten nur mit notwendigen Netzwerken kommunizieren.",
+                        solution=f"Inter-VLAN Routing fuer VLAN {vlan_tag} auf benoetigte Netze beschraenken.",
+                        details={"allowed_destinations": list(connections)[:10]},
                     ))
 
         return findings
@@ -109,10 +111,10 @@ class VLANAnalyzer:
         """Check if management VLAN exists and is properly configured"""
         findings = []
 
-        # Look for management VLAN (typically VLAN 10 or contains 'management' in name)
+        # Management VLAN: tag 10 or 'manage' in description.
         management_vlans = [
             v for v in vlans
-            if v.get("tag") == 10 or "manage" in v.get("descr", "").lower()
+            if _vlan_tag(v) == "10" or "manage" in (v.get("descr", "") or "").lower()
         ]
 
         if not management_vlans:
@@ -149,36 +151,29 @@ class VLANAnalyzer:
                 details={"recommended_vlan_id": 50}
             ))
         else:
-            # Check if guest VLAN has access to internal networks
             for guest_vlan in guest_vlans:
-                vlan_tag = guest_vlan.get("tag")
+                vlan_tag = _vlan_tag(guest_vlan)
                 vlan_interface = guest_vlan.get("if", "")
 
-                # Check firewall rules for guest VLAN access
                 has_internal_access = False
                 for rule in firewall_rules:
-                    if rule.get("enabled") != "1" or rule.get("action") != "pass":
+                    if not truthy(rule.get("enabled")) or rule.get("action") != "pass":
                         continue
-
-                    src_interface = rule.get("interface", "")
+                    src_interfaces = {i for i in (rule.get("interface", "") or "").split(",") if i}
                     dst_net = rule.get("destination_net", "")
-
-                    if vlan_interface in src_interface:
-                        # Check if destination is internal network
-                        internal_nets = ["192.168.", "10.", "172.16.", "172.17.", "172.18."]
-                        if any(net in str(dst_net) for net in internal_nets):
-                            has_internal_access = True
-                            break
+                    if vlan_interface and vlan_interface in src_interfaces and is_rfc1918(dst_net):
+                        has_internal_access = True
+                        break
 
                 if has_internal_access:
                     findings.append(VLANFinding(
                         severity="HIGH",
-                        vlan_id=vlan_tag,
+                        vlan_id=int(vlan_tag) if vlan_tag.isdigit() else 0,
                         vlan_name=guest_vlan.get("descr", "Guest"),
                         issue="Guest VLAN hat Zugriff auf interne Netzwerke",
-                        reason="Guest-Geräte sollten nur Internet-Zugriff haben",
-                        solution=f"Blockiere Zugriff von VLAN {vlan_tag} auf interne RFC1918 Netzwerke",
-                        details={"vlan": vlan_tag}
+                        reason="Guest-Geraete sollten nur Internet-Zugriff haben.",
+                        solution=f"Zugriff von VLAN {vlan_tag} auf RFC1918-Netze blockieren.",
+                        details={"vlan": vlan_tag},
                     ))
 
         return findings
@@ -187,8 +182,8 @@ class VLANAnalyzer:
         """Check for VLAN-specific security issues"""
         findings = []
 
-        # Check for VLAN 1 usage (default VLAN)
-        vlan_1_in_use = any(v.get("tag") == 1 for v in vlans)
+        # Check for VLAN 1 usage (default VLAN).
+        vlan_1_in_use = any(_vlan_tag(v) == "1" for v in vlans)
         if vlan_1_in_use:
             findings.append(VLANFinding(
                 severity="MEDIUM",
@@ -200,22 +195,22 @@ class VLANAnalyzer:
                 details={"vlan": 1}
             ))
 
-        # Check for unusual VLAN ranges
+        # Check for unusual or invalid VLAN tags. Valid 802.1Q range is 1-4094.
         for vlan in vlans:
-            vlan_tag = vlan.get("tag")
+            vlan_tag = _vlan_tag(vlan)
             try:
-                vlan_tag_int = int(vlan_tag) if vlan_tag else 0
+                vlan_tag_int = int(vlan_tag) if vlan_tag else -1
             except (ValueError, TypeError):
-                vlan_tag_int = 0
-            if vlan_tag_int > 4094:
+                vlan_tag_int = -1
+            if vlan_tag_int < 1 or vlan_tag_int > 4094:
                 findings.append(VLANFinding(
                     severity="LOW",
-                    vlan_id=vlan_tag,
+                    vlan_id=vlan_tag_int if vlan_tag_int > 0 else 0,
                     vlan_name=vlan.get("descr", "Unknown"),
-                    issue=f"VLAN ID {vlan_tag} außerhalb normalem Bereich",
-                    reason="VLAN IDs sollten zwischen 2 und 4094 liegen",
-                    solution="Verwende VLAN IDs im Standard-Bereich (2-4094)",
-                    details={"vlan": vlan_tag}
+                    issue=f"VLAN ID '{vlan_tag}' ausserhalb 1..4094",
+                    reason="802.1Q erlaubt VLAN IDs 1..4094, alles andere wird vom Switch verworfen.",
+                    solution="VLAN ID im Bereich 2..4094 verwenden.",
+                    details={"vlan": vlan_tag},
                 ))
 
         return findings

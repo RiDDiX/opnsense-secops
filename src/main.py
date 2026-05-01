@@ -7,6 +7,7 @@ import os
 import sys
 from dataclasses import asdict
 
+from src.analyzers.certificate_analyzer import CertificateAnalyzer
 from src.analyzers.dns_analyzer import DNSAnalyzer
 from src.analyzers.firewall_analyzer import FirewallAnalyzer
 from src.analyzers.gateway_analyzer import GatewayAnalyzer
@@ -85,20 +86,21 @@ class SecurityAuditor:
         return True
 
     def initialize_client(self) -> bool:
-        """Initialize OPNsense API client"""
+        """Initialize OPNsense API client. Honours OPNSENSE_INSECURE_TLS for self signed setups."""
         try:
+            insecure = str(os.getenv("OPNSENSE_INSECURE_TLS", "0")).lower() in ("1", "true", "yes", "on")
             self.client = OPNsenseClient(
                 host=self.opnsense_host,
                 api_key=self.opnsense_api_key,
                 api_secret=self.opnsense_api_secret,
-                verify_ssl=False
+                verify_ssl=not insecure,
             )
 
             if not self.client.test_connection():
                 logger.error("Failed to connect to OPNsense")
                 return False
 
-            logger.info(f"Successfully connected to OPNsense at {self.opnsense_host}")
+            logger.info(f"Connected to OPNsense at {self.opnsense_host}")
             return True
 
         except Exception as e:
@@ -150,50 +152,40 @@ class SecurityAuditor:
         return private_networks
 
     def initialize_analyzers(self):
-        """Initialize all analyzers"""
+        """Initialize all analyzers. A failure in one does not abort the rest."""
         scan_options = self.config_loader.get_scan_options()
 
-        self.firewall_analyzer = FirewallAnalyzer(
-            self.rules,
-            self.config_loader.get_firewall_exceptions()
-        )
+        def _try(label, ctor):
+            try:
+                return ctor()
+            except Exception as e:
+                logger.error(f"Analyzer '{label}' failed to init: {e}")
+                return None
 
-        self.port_scanner = PortScanner(
-            self.rules,
-            self.config_loader.get_port_exceptions(),
-            scan_options
-        )
-
-        self.dns_analyzer = DNSAnalyzer(
-            self.rules,
-            self.config_loader.get_dns_exceptions()
-        )
-
-        self.vlan_analyzer = VLANAnalyzer(
-            self.rules,
-            self.config_loader.get_vlan_exceptions()
-        )
-
-        self.network_discovery = NetworkDiscovery(scan_options)
-
-        self.vulnerability_scanner = VulnerabilityScanner(scan_options)
-
-        self.system_security_analyzer = SystemSecurityAnalyzer(
-            self.rules,
-            self.config_loader.get_system_exceptions()
-        )
-
-        self.optimal_config_generator = OptimalConfigGenerator()
+        self.firewall_analyzer = _try("firewall", lambda: FirewallAnalyzer(
+            self.rules, self.config_loader.get_firewall_exceptions()))
+        self.port_scanner = _try("ports", lambda: PortScanner(
+            self.rules, self.config_loader.get_port_exceptions(), scan_options))
+        self.dns_analyzer = _try("dns", lambda: DNSAnalyzer(
+            self.rules, self.config_loader.get_dns_exceptions()))
+        self.vlan_analyzer = _try("vlan", lambda: VLANAnalyzer(
+            self.rules, self.config_loader.get_vlan_exceptions()))
+        self.network_discovery = _try("network", lambda: NetworkDiscovery(scan_options))
+        self.vulnerability_scanner = _try("vuln", lambda: VulnerabilityScanner(scan_options))
+        self.system_security_analyzer = _try("system", lambda: SystemSecurityAnalyzer(
+            self.rules, self.config_loader.get_system_exceptions()))
+        self.optimal_config_generator = _try("optimal", lambda: OptimalConfigGenerator())
 
         ipv6_strict = bool(self.exceptions.get("scan_options", {}).get("ipv6_strict", True))
-        self.ipv6_parity_analyzer = IPv6ParityAnalyzer(
-            self.config_loader.get_firewall_exceptions(),
-            strict=ipv6_strict,
-        )
-        self.gateway_analyzer = GatewayAnalyzer(self.config_loader.get_firewall_exceptions())
-        self.radvd_analyzer = RadvdAnalyzer(self.config_loader.get_firewall_exceptions())
+        self.ipv6_parity_analyzer = _try("ipv6", lambda: IPv6ParityAnalyzer(
+            self.config_loader.get_firewall_exceptions(), strict=ipv6_strict))
+        self.gateway_analyzer = _try("gateway", lambda: GatewayAnalyzer(
+            self.config_loader.get_firewall_exceptions()))
+        self.radvd_analyzer = _try("radvd", lambda: RadvdAnalyzer(
+            self.config_loader.get_firewall_exceptions()))
+        self.certificate_analyzer = _try("certs", lambda: CertificateAnalyzer())
 
-        logger.info("All analyzers initialized")
+        logger.info("Analyzers initialized")
 
     def _update_progress(self, step_name: str, step_number: int) -> bool:
         """Update scan progress if scan_manager is available. Returns False if cancelled."""
@@ -278,6 +270,7 @@ class SecurityAuditor:
             "ipv6_findings": [],
             "gateway_findings": [],
             "radvd_findings": [],
+            "certificate_findings": [],
             "devices": [],
             "network_map": {},
             "statistics": {},
@@ -519,11 +512,26 @@ class SecurityAuditor:
         self._update_stats(findings_count=total_findings)
         logger.info(f"Found {len(vuln_findings)} known vulnerabilities")
 
+        # Certificate hygiene
+        cert_findings = []
+        if self.certificate_analyzer:
+            try:
+                self._log('check', 'Pruefe Zertifikate auf Ablauf und schwache Schluessel...')
+                certs = self.client.get_certificates()
+                cert_findings = self.certificate_analyzer.analyze(certs)
+                results["certificate_findings"] = [asdict(f) for f in cert_findings]
+                if cert_findings:
+                    self._log('warning', f'{len(cert_findings)} Zertifikat-Probleme gefunden')
+                else:
+                    self._log('success', 'Zertifikate OK')
+            except Exception as e:
+                logger.warning(f"Certificate analyzer failed: {e}")
+
         # Generate Summary
         all_findings = (
             firewall_findings + port_findings + dns_findings + vlan_findings
             + vuln_findings + system_findings + ipv6_findings
-            + gateway_findings + radvd_findings
+            + gateway_findings + radvd_findings + cert_findings
         )
         results["summary"] = self._generate_summary(all_findings)
 
@@ -564,47 +572,41 @@ class SecurityAuditor:
 
         return summary
 
-    def run(self):
-        """Main execution flow"""
-        logger.info("=" * 80)
-        logger.info("OPNsense Security Auditor Starting")
-        logger.info("=" * 80)
+    # Exit codes: 0 ok, 1 config, 2 connection, 3 runtime, 4 cancelled.
+    EXIT_OK = 0
+    EXIT_CONFIG = 1
+    EXIT_CONNECTION = 2
+    EXIT_RUNTIME = 3
+    EXIT_CANCELLED = 4
 
-        # Validate configuration
+    def run(self):
+        logger.info("OPNsense Security Auditor starting")
+
         if not self.validate_configuration():
             logger.error("Configuration validation failed")
-            sys.exit(1)
+            sys.exit(self.EXIT_CONFIG)
 
-        # Initialize client
         if not self.initialize_client():
             logger.error("Failed to initialize OPNsense client")
-            sys.exit(1)
+            sys.exit(self.EXIT_CONNECTION)
 
-        # Initialize analyzers
         self.initialize_analyzers()
 
-        # Run audit
         try:
             results = self.run_audit()
-
-            # Print summary to console
             self.report_generator.print_summary(results)
-
-            # Generate reports
-            logger.info("Generating reports...")
+            logger.info("Generating reports")
             report_files = self.report_generator.generate_reports(results)
-
-            logger.info("Reports generated:")
             for report_file in report_files:
                 logger.info(f"  - {report_file}")
+            logger.info("Security audit completed")
 
-            logger.info("=" * 80)
-            logger.info("Security Audit Completed Successfully")
-            logger.info("=" * 80)
-
+        except KeyboardInterrupt:
+            logger.warning("Audit cancelled by user")
+            sys.exit(self.EXIT_CANCELLED)
         except Exception as e:
-            logger.error(f"Audit failed with error: {e}", exc_info=True)
-            sys.exit(1)
+            logger.error(f"Audit failed: {e}", exc_info=True)
+            sys.exit(self.EXIT_RUNTIME)
 
 
 def main():

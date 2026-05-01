@@ -1,21 +1,7 @@
-"""
-IPv6 hygiene checks for OPNsense.
-
-Three checks:
-1) Detect the auto-seeded "Default allow LAN IPv6 to any" rule. The rule itself
-   only permits LAN clients to initiate outbound v6, return traffic is handled
-   by the stateful filter. It does not, by itself, expose hosts to the internet.
-   Finding fires when there is no explicit WAN inbound block to LAN net as
-   defense in depth.
-2) Audit WAN inbound IPv6 PASS rules. Each one is a potential exposure of an
-   internal service over IPv6.
-3) IPv4 vs IPv6 parity per interface, kept as LOW since a missing v6 pass
-   rule is a feature gap, not a hole. Default-deny still blocks the traffic.
-
-Findings carry an addRule payload so the dashboard can apply the fix with one
-POST to /api/firewall/filter/addRule.
-"""
+"""IPv6 hygiene checks for OPNsense. See module body for the three checks."""
 from dataclasses import dataclass, field
+
+from src.analyzers._utils import truthy
 
 
 @dataclass
@@ -61,7 +47,7 @@ def _rule_signature(rule: dict) -> tuple:
 
 def _is_default_allow_lan_v6(rule: dict) -> bool:
     """Match the auto rule shape from config.xml.sample."""
-    if str(rule.get("enabled", "0")) != "1":
+    if not truthy(rule.get("enabled")):
         return False
     if rule.get("action") != "pass":
         return False
@@ -93,7 +79,7 @@ def _v6_pair_for(rule: dict, by_iface_v6: dict[str, list[dict]]) -> dict | None:
 def _has_wan_v6_block_to_lan(rules: list[dict]) -> bool:
     """True when an explicit WAN inbound block to lan net for v6 already exists."""
     for r in rules:
-        if str(r.get("enabled", "0")) != "1":
+        if not truthy(r.get("enabled")):
             continue
         if r.get("action") != "block":
             continue
@@ -184,7 +170,7 @@ class IPv6ParityAnalyzer:
 
         # WAN inbound v6 pass rules expose internal services. List them.
         for rule in firewall_rules:
-            if str(rule.get("enabled", "0")) != "1":
+            if not truthy(rule.get("enabled")):
                 continue
             if rule.get("uuid") in self._exempt_uuids:
                 continue
@@ -202,7 +188,7 @@ class IPv6ParityAnalyzer:
         # Parity check, downgraded to LOW because default-deny already protects.
         v6_by_iface: dict[str, list[dict]] = {}
         for rule in firewall_rules:
-            if str(rule.get("enabled", "0")) != "1":
+            if not truthy(rule.get("enabled")):
                 continue
             if rule.get("ipprotocol") not in ("inet6", "inet46"):
                 continue
@@ -210,7 +196,7 @@ class IPv6ParityAnalyzer:
                 v6_by_iface.setdefault(iface, []).append(rule)
 
         for rule in firewall_rules:
-            if str(rule.get("enabled", "0")) != "1":
+            if not truthy(rule.get("enabled")):
                 continue
             if rule.get("action") != "pass":
                 continue

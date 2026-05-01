@@ -1,11 +1,7 @@
-"""
-Gateway hygiene checks.
-
-Reads /api/routing/settings/searchGateway. Flags missing monitor IP,
-disabled monitoring, missing default v6 gateway when v6 traffic exists,
-and overly aggressive thresholds.
-"""
+"""Gateway hygiene checks against /api/routing/settings/searchGateway."""
 from dataclasses import dataclass, field
+
+from src.analyzers._utils import truthy
 
 
 @dataclass
@@ -32,22 +28,21 @@ class GatewayAnalyzer:
             return findings
 
         has_v6_default = any(
-            (g.get("ipprotocol") == "inet6") and (str(g.get("defaultgw", "0")) in ("1", "True", "true", True))
+            g.get("ipprotocol") == "inet6" and truthy(g.get("defaultgw"))
             for g in gateways
         )
         any_rule_v6 = any(
-            (r.get("ipprotocol") in ("inet6", "inet46")) and str(r.get("enabled", "0")) == "1"
+            r.get("ipprotocol") in ("inet6", "inet46") and truthy(r.get("enabled"))
             for r in (firewall_rules or [])
         )
 
         for gw in gateways:
             name = gw.get("name") or gw.get("descr") or "gateway"
             iface = gw.get("interface", "")
-            disabled = bool(gw.get("disabled"))
-            if disabled:
+            if truthy(gw.get("disabled")):
                 continue
             monitor = (gw.get("monitor") or "").strip()
-            monitor_disabled = str(gw.get("monitor_disable", "0")) in ("1", "True", "true", True)
+            monitor_disabled = truthy(gw.get("monitor_disable"))
             if not monitor and not monitor_disabled:
                 findings.append(GatewayFinding(
                     severity="MEDIUM",

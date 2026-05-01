@@ -2,8 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     nmap \
     iputils-ping \
     net-tools \
@@ -11,24 +10,30 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
 COPY src/ ./src/
-
-# Copy default config files to a separate location (will be copied to mounted volume if empty)
 COPY config/ ./config-defaults/
 
-# Create directories
-RUN mkdir -p /app/reports /app/config
+RUN mkdir -p /app/reports /app/config \
+    && groupadd -g 10001 secops \
+    && useradd -u 10001 -g secops -s /usr/sbin/nologin -m -d /home/secops secops \
+    && chown -R secops:secops /app /home/secops
 
-# Copy and setup entrypoint script
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
-ENV PYTHONUNBUFFERED=1
+# nmap raw socket use needs CAP_NET_RAW; the container caps grant it without root.
+USER secops
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+EXPOSE 5000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:5000/api/health || exit 1
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["python", "-m", "src.web.app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4", "--timeout", "120", "src.web.app:app"]

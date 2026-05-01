@@ -100,7 +100,8 @@ class NetworkDiscovery:
                     device_map[ip]["mac"] = mac
                 elif not device_map[ip].get("mac"):
                     device_map[ip]["mac"] = ""
-                device_map[ip]["vendor"] = self._lookup_vendor(mac or "")
+                if not device_map[ip].get("vendor"):
+                    device_map[ip]["vendor"] = ""
                 device_map[ip]["status"] = "active"
                 # ARP hostname (some OPNsense versions include it)
                 arp_hostname = self._extract_field(arp_entry, ("hostname", "name", "host"))
@@ -156,12 +157,12 @@ class NetworkDiscovery:
         devices = []
 
         try:
-            # Quick host discovery
             logger.info(f"Scanning {network} for live hosts")
 
-            scan_args = '-sn'  # Ping scan only
+            # Default ping scan with multiple probes so non-ICMP hosts are still found.
+            scan_args = '-sn -PE -PA80,443'
             if self.scan_options.get("skip_ping", False):
-                scan_args = '-Pn -sS -p 22,80,443'  # Assume host is up, scan common ports
+                scan_args = '-Pn -sS -p 22,80,443'
 
             self.nm.scan(hosts=network, arguments=scan_args)
 
@@ -242,28 +243,28 @@ class NetworkDiscovery:
         return "Unknown"
 
     def _lookup_vendor(self, mac: str) -> str:
-        """Lookup vendor from MAC address"""
-        # This would need a MAC vendor database
-        # For now, return Unknown
-        return "Unknown"
+        """Vendor lookup happens via nmap MAC database during scan."""
+        return ""
 
     def _determine_vlan(self, ip: str, vlans: list[dict]) -> str:
-        """Determine which VLAN an IP belongs to"""
+        """Match an IP to a VLAN by subnet, when the VLAN entry carries one."""
+        if not ip or not vlans:
+            return "Unknown"
         try:
-            ipaddress.ip_address(ip)
+            ip_obj = ipaddress.ip_address(ip)
+        except (ValueError, TypeError):
+            return "Unknown"
 
-            # Match IP to VLAN based on subnet
-            # This is simplified - in reality you'd need subnet info from VLANs
-            for vlan in vlans:
-                vlan_tag = vlan.get("tag", "")
-                vlan_desc = vlan.get("descr", f"VLAN {vlan_tag}")
-                # You would match against VLAN subnet here
-                # For now, return description
-                return f"{vlan_desc} (VLAN {vlan_tag})"
-
-        except Exception:
-            pass
-
+        for vlan in vlans:
+            subnet = vlan.get("subnet") or vlan.get("network") or ""
+            if not subnet:
+                continue
+            try:
+                if ip_obj in ipaddress.ip_network(subnet, strict=False):
+                    tag = vlan.get("tag", "")
+                    return f"{vlan.get('descr', f'VLAN {tag}')} (VLAN {tag})"
+            except (ValueError, TypeError):
+                continue
         return "Unknown"
 
     def _determine_network(self, ip: str, networks: list[str]) -> str:
