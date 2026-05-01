@@ -3,8 +3,7 @@ Optimal Configuration Generator
 Security hardening recommendations for OPNsense
 """
 import logging
-from typing import Dict, List
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +17,7 @@ class ConfigRecommendation:
     current_value: str
     recommended_value: str
     reason: str
-    implementation_steps: List[str]
+    implementation_steps: list[str]
     impact: str
 
 
@@ -28,9 +27,9 @@ class OptimalConfigGenerator:
     def __init__(self):
         self.recommendations = []
 
-    def generate_recommendations(self, audit_results: Dict) -> Dict:
+    def generate_recommendations(self, audit_results: dict) -> dict:
         """Build config recommendations from audit data"""
-        
+
         recommendations = {
             "security_score": 0,
             "max_score": 100,
@@ -47,12 +46,12 @@ class OptimalConfigGenerator:
         for key in ['firewall_findings', 'port_findings', 'dns_findings',
                      'vlan_findings', 'vulnerability_findings', 'system_findings']:
             all_findings.extend(audit_results.get(key, []))
-        
+
         # Sort by severity (most severe first) for fair diminishing
         sev_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
         all_findings.sort(key=lambda f: sev_order.get(
             (f.get('severity', '') or '').upper(), 4))
-        
+
         total_penalty = 0
         for i, f in enumerate(all_findings):
             sev = (f.get('severity', '') or '').upper()
@@ -91,10 +90,10 @@ class OptimalConfigGenerator:
         else:
             return "F"
 
-    def _analyze_firewall_recommendations(self, audit_results: Dict) -> Dict:
+    def _analyze_firewall_recommendations(self, audit_results: dict) -> dict:
         """Generate firewall-specific recommendations"""
         firewall_findings = audit_results.get("firewall_findings", [])
-        
+
         recommendations = {
             "status": "secure" if len(firewall_findings) == 0 else "needs_attention",
             "findings_count": len(firewall_findings),
@@ -144,7 +143,7 @@ class OptimalConfigGenerator:
         recommendations["recommendations"] = standard_recs
         return recommendations
 
-    def _analyze_dns_recommendations(self, audit_results: Dict) -> Dict:
+    def _analyze_dns_recommendations(self, audit_results: dict) -> dict:
         """Generate DNS-specific recommendations"""
         dns_findings = audit_results.get("dns_findings", [])
 
@@ -192,10 +191,10 @@ class OptimalConfigGenerator:
             ]
         }
 
-    def _analyze_network_recommendations(self, audit_results: Dict) -> Dict:
+    def _analyze_network_recommendations(self, audit_results: dict) -> dict:
         """Generate network/VLAN recommendations"""
         vlan_findings = audit_results.get("vlan_findings", [])
-        
+
         return {
             "status": "secure" if len(vlan_findings) == 0 else "needs_attention",
             "findings_count": len(vlan_findings),
@@ -216,7 +215,7 @@ class OptimalConfigGenerator:
             ]
         }
 
-    def _analyze_system_recommendations(self, audit_results: Dict) -> Dict:
+    def _analyze_system_recommendations(self, audit_results: dict) -> dict:
         """Generate system security recommendations"""
         system_findings = audit_results.get("system_findings", [])
 
@@ -262,7 +261,7 @@ class OptimalConfigGenerator:
             ]
         }
 
-    def _analyze_monitoring_recommendations(self, audit_results: Dict) -> Dict:
+    def _analyze_monitoring_recommendations(self, audit_results: dict) -> dict:
         """Generate monitoring and logging recommendations"""
         return {
             "status": "review_recommended",
@@ -297,13 +296,13 @@ class OptimalConfigGenerator:
             ]
         }
 
-    def _generate_priority_actions(self, audit_results: Dict) -> List[Dict]:
+    def _generate_priority_actions(self, audit_results: dict) -> list[dict]:
         """Generate prioritized action list based on findings"""
         actions = []
 
         # Process all findings and create priority actions
         all_findings = []
-        
+
         for finding in audit_results.get("firewall_findings", []):
             all_findings.append({"type": "firewall", **finding})
         for finding in audit_results.get("dns_findings", []):
@@ -342,7 +341,7 @@ class OptimalConfigGenerator:
         }
         return impacts.get(severity, "Unknown impact")
 
-    def _get_optimal_config(self) -> Dict:
+    def _get_optimal_config(self) -> dict:
         """Return the optimal security configuration"""
         return {
             "firewall": {
@@ -396,7 +395,7 @@ class OptimalConfigGenerator:
             }
         }
 
-    def _get_implementation_guide(self) -> List[Dict]:
+    def _get_implementation_guide(self) -> list[dict]:
         """Return step-by-step implementation guide"""
         return [
             {

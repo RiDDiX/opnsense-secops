@@ -3,7 +3,6 @@ System Security Analyzer
 Analyzes OPNsense system security settings
 """
 import logging
-from typing import Dict, List
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -17,7 +16,7 @@ class SystemSecurityFinding:
     issue: str
     reason: str
     solution: str
-    details: Dict
+    details: dict
     opnsense_path: str = ""
     current_value: str = ""
     recommended_value: str = ""
@@ -27,11 +26,11 @@ class SystemSecurityFinding:
 class SystemSecurityAnalyzer:
     """Analyzes OPNsense system security configuration"""
 
-    def __init__(self, rules_config: Dict, exceptions: List[Dict]):
+    def __init__(self, rules_config: dict, exceptions: list[dict]):
         self.rules_config = rules_config
         self.exceptions = exceptions
 
-    def analyze(self, system_config: Dict) -> List[SystemSecurityFinding]:
+    def analyze(self, system_config: dict) -> list[SystemSecurityFinding]:
         """Analyze system security configuration"""
         findings = []
 
@@ -48,7 +47,7 @@ class SystemSecurityAnalyzer:
 
         return findings
 
-    def _analyze_ssh_config(self, ssh_config: Dict) -> List[SystemSecurityFinding]:
+    def _analyze_ssh_config(self, ssh_config: dict) -> list[SystemSecurityFinding]:
         """Analyze SSH configuration"""
         findings = []
 
@@ -145,7 +144,7 @@ class SystemSecurityAnalyzer:
 
         return findings
 
-    def _analyze_admin_interface(self, webgui_config: Dict) -> List[SystemSecurityFinding]:
+    def _analyze_admin_interface(self, webgui_config: dict) -> list[SystemSecurityFinding]:
         """Analyze web admin interface configuration"""
         findings = []
 
@@ -288,7 +287,7 @@ class SystemSecurityAnalyzer:
 
         return findings
 
-    def _analyze_ids_config(self, ids_config: Dict) -> List[SystemSecurityFinding]:
+    def _analyze_ids_config(self, ids_config: dict) -> list[SystemSecurityFinding]:
         """Analyze Intrusion Detection System configuration"""
         findings = []
 
@@ -360,7 +359,7 @@ class SystemSecurityAnalyzer:
 
         return findings
 
-    def _analyze_update_config(self, firmware_config: Dict) -> List[SystemSecurityFinding]:
+    def _analyze_update_config(self, firmware_config: dict) -> list[SystemSecurityFinding]:
         """Analyze firmware/update configuration"""
         findings = []
 
@@ -410,7 +409,7 @@ class SystemSecurityAnalyzer:
 
         return findings
 
-    def _analyze_general_settings(self, general_config: Dict) -> List[SystemSecurityFinding]:
+    def _analyze_general_settings(self, general_config: dict) -> list[SystemSecurityFinding]:
         """Analyze general system settings"""
         findings = []
 
@@ -457,7 +456,7 @@ class SystemSecurityAnalyzer:
 
         return findings
 
-    def _analyze_authentication(self, auth_config: Dict) -> List[SystemSecurityFinding]:
+    def _analyze_authentication(self, auth_config: dict) -> list[SystemSecurityFinding]:
         """Analyze authentication settings"""
         findings = []
 
@@ -514,13 +513,13 @@ class SystemSecurityAnalyzer:
 
         return findings
 
-    def _analyze_vpn_config(self, vpn_config: Dict) -> List[SystemSecurityFinding]:
+    def _analyze_vpn_config(self, vpn_config: dict) -> list[SystemSecurityFinding]:
         """Analyze VPN configuration"""
         findings = []
-        
+
         if not vpn_config:
             return findings
-        
+
         # OpenVPN checks
         openvpn = vpn_config.get("openvpn", {})
         for server in openvpn.get("servers", []):
@@ -538,7 +537,7 @@ class SystemSecurityAnalyzer:
                     details={"cipher": cipher},
                     opnsense_path="VPN > OpenVPN > Servers"
                 ))
-            
+
             # Check auth digest
             auth = server.get("auth", "")
             if auth.upper() in ["MD5", "SHA1"]:
@@ -552,7 +551,7 @@ class SystemSecurityAnalyzer:
                     details={"auth": auth},
                     opnsense_path="VPN > OpenVPN > Servers"
                 ))
-            
+
             # Check TLS auth
             tls_auth = server.get("tls_auth", "0") == "1"
             if not tls_auth:
@@ -566,7 +565,7 @@ class SystemSecurityAnalyzer:
                     details={"tls_auth": "disabled"},
                     opnsense_path="VPN > OpenVPN > Servers > Cryptographic Settings"
                 ))
-        
+
         # IPsec checks
         ipsec = vpn_config.get("ipsec", {})
         if ipsec.get("enabled", "0") == "1":
@@ -584,7 +583,7 @@ class SystemSecurityAnalyzer:
                         details={"encryption": enc},
                         opnsense_path="VPN > IPsec > Tunnel Settings"
                     ))
-        
+
         # WireGuard checks
         wireguard = vpn_config.get("wireguard", {})
         if wireguard.get("enabled", "0") == "1":
@@ -602,13 +601,13 @@ class SystemSecurityAnalyzer:
                         details={"peer": peer.get("name", "unknown")},
                         opnsense_path="VPN > WireGuard > Peers"
                     ))
-        
+
         return findings
 
-    def _analyze_logging_config(self, logging_config: Dict) -> List[SystemSecurityFinding]:
+    def _analyze_logging_config(self, logging_config: dict) -> list[SystemSecurityFinding]:
         """Analyze logging configuration"""
         findings = []
-        
+
         if not logging_config:
             findings.append(SystemSecurityFinding(
                 severity="MEDIUM",
@@ -623,7 +622,7 @@ class SystemSecurityAnalyzer:
                 recommended_value="Logging: Explizit konfiguriert mit Remote-Syslog"
             ))
             return findings
-        
+
         # Check remote syslog
         remote_syslog = logging_config.get("remote_syslog", {})
         has_remote = remote_syslog.get("enabled", False)
@@ -646,7 +645,7 @@ class SystemSecurityAnalyzer:
                     "Speichern"
                 ]
             ))
-        
+
         # Check log retention
         try:
             preserve_logs = int(logging_config.get("preserve_logs", 7) or 7)
@@ -670,7 +669,7 @@ class SystemSecurityAnalyzer:
                     "Speichern"
                 ]
             ))
-        
+
         # Check firewall logging
         fw_log = logging_config.get("firewall", {})
         if not fw_log.get("log_default_block", True):
@@ -691,13 +690,13 @@ class SystemSecurityAnalyzer:
                     "Speichern und Apply"
                 ]
             ))
-        
+
         return findings
 
-    def _analyze_cron_backup(self, cron_config: Dict) -> List[SystemSecurityFinding]:
+    def _analyze_cron_backup(self, cron_config: dict) -> list[SystemSecurityFinding]:
         """Analyze backup and cron configuration"""
         findings = []
-        
+
         backup = cron_config.get("backup", {})
         has_backup = backup.get("enabled", False)
         if not has_backup:
@@ -719,7 +718,7 @@ class SystemSecurityAnalyzer:
                     "Backup-Verschlüsselung aktivieren"
                 ]
             ))
-        
+
         if has_backup and not backup.get("encrypted", False):
             findings.append(SystemSecurityFinding(
                 severity="MEDIUM",
@@ -739,16 +738,16 @@ class SystemSecurityAnalyzer:
                     "Speichern"
                 ]
             ))
-        
+
         return findings
 
-    def _analyze_captive_portal(self, cp_config: Dict) -> List[SystemSecurityFinding]:
+    def _analyze_captive_portal(self, cp_config: dict) -> list[SystemSecurityFinding]:
         """Analyze Captive Portal configuration"""
         findings = []
-        
+
         if not cp_config or not cp_config.get("enabled", False):
             return findings
-        
+
         has_https = cp_config.get("https", False)
         if not has_https:
             findings.append(SystemSecurityFinding(
@@ -769,7 +768,7 @@ class SystemSecurityAnalyzer:
                     "Speichern"
                 ]
             ))
-        
+
         try:
             timeout = int(cp_config.get("timeout", 0) or 0)
         except (ValueError, TypeError):
@@ -788,10 +787,10 @@ class SystemSecurityAnalyzer:
                 current_value=f"Session-Timeout: {timeout_display}",
                 recommended_value="Session-Timeout: 240-480 Minuten"
             ))
-        
+
         return findings
 
-    def get_optimal_system_config(self) -> Dict:
+    def get_optimal_system_config(self) -> dict:
         """Return optimal system security configuration"""
         return {
             "ssh_settings": {

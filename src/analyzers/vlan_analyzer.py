@@ -3,9 +3,8 @@ VLAN Analyzer
 Analyzes VLAN configuration and segmentation for security issues
 """
 import logging
-from typing import Dict, List, Set
-from dataclasses import dataclass
 from collections import defaultdict
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -19,19 +18,19 @@ class VLANFinding:
     issue: str
     reason: str
     solution: str
-    details: Dict
+    details: dict
 
 
 class VLANAnalyzer:
     """Analyzes VLAN configuration for security issues"""
 
-    def __init__(self, rules_config: Dict, exceptions: List[Dict]):
+    def __init__(self, rules_config: dict, exceptions: list[dict]):
         self.rules_config = rules_config
         self.exceptions = exceptions
         self.vlan_security = rules_config.get("vlan_security", {})
         self.recommended_vlans = rules_config.get("network_segmentation", {}).get("recommended_vlans", [])
 
-    def analyze(self, vlans: List[Dict], interfaces: Dict, firewall_rules: List[Dict]) -> List[VLANFinding]:
+    def analyze(self, vlans: list[dict], interfaces: dict, firewall_rules: list[dict]) -> list[VLANFinding]:
         """Analyze VLAN configuration and segmentation"""
         findings = []
 
@@ -64,7 +63,7 @@ class VLANAnalyzer:
 
         return findings
 
-    def _analyze_vlan_isolation(self, vlans: List[Dict], firewall_rules: List[Dict]) -> List[VLANFinding]:
+    def _analyze_vlan_isolation(self, vlans: list[dict], firewall_rules: list[dict]) -> list[VLANFinding]:
         """Check if VLANs are properly isolated"""
         findings = []
 
@@ -106,7 +105,7 @@ class VLANAnalyzer:
 
         return findings
 
-    def _check_management_vlan(self, vlans: List[Dict]) -> List[VLANFinding]:
+    def _check_management_vlan(self, vlans: list[dict]) -> list[VLANFinding]:
         """Check if management VLAN exists and is properly configured"""
         findings = []
 
@@ -129,7 +128,7 @@ class VLANAnalyzer:
 
         return findings
 
-    def _check_guest_isolation(self, vlans: List[Dict], firewall_rules: List[Dict]) -> List[VLANFinding]:
+    def _check_guest_isolation(self, vlans: list[dict], firewall_rules: list[dict]) -> list[VLANFinding]:
         """Check if guest network is properly isolated"""
         findings = []
 
@@ -184,7 +183,7 @@ class VLANAnalyzer:
 
         return findings
 
-    def _check_vlan_security(self, vlans: List[Dict]) -> List[VLANFinding]:
+    def _check_vlan_security(self, vlans: list[dict]) -> list[VLANFinding]:
         """Check for VLAN-specific security issues"""
         findings = []
 
@@ -215,13 +214,13 @@ class VLANAnalyzer:
                     vlan_name=vlan.get("descr", "Unknown"),
                     issue=f"VLAN ID {vlan_tag} außerhalb normalem Bereich",
                     reason="VLAN IDs sollten zwischen 2 und 4094 liegen",
-                    solution=f"Verwende VLAN IDs im Standard-Bereich (2-4094)",
+                    solution="Verwende VLAN IDs im Standard-Bereich (2-4094)",
                     details={"vlan": vlan_tag}
                 ))
 
         return findings
 
-    def _check_segmentation_best_practices(self, vlans: List[Dict]) -> List[VLANFinding]:
+    def _check_segmentation_best_practices(self, vlans: list[dict]) -> list[VLANFinding]:
         """Check against recommended VLAN segmentation"""
         findings = []
 
@@ -269,6 +268,6 @@ class VLANAnalyzer:
                     return True
         return False
 
-    def get_vlan_recommendations(self) -> List[Dict]:
+    def get_vlan_recommendations(self) -> list[dict]:
         """Get recommended VLAN structure"""
         return self.recommended_vlans

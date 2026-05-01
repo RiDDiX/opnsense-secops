@@ -2,23 +2,25 @@
 OPNsense Security Auditor
 Main entry point for firewall security scans
 """
+import logging
 import os
 import sys
-import logging
-from typing import Dict, List
 from dataclasses import asdict
 
-from src.opnsense_client import OPNsenseClient
-from src.config_loader import ConfigLoader
-from src.report_generator import ReportGenerator
-from src.analyzers.firewall_analyzer import FirewallAnalyzer
-from src.analyzers.port_scanner import PortScanner
 from src.analyzers.dns_analyzer import DNSAnalyzer
-from src.analyzers.vlan_analyzer import VLANAnalyzer
+from src.analyzers.firewall_analyzer import FirewallAnalyzer
+from src.analyzers.gateway_analyzer import GatewayAnalyzer
+from src.analyzers.ipv6_parity_analyzer import IPv6ParityAnalyzer
 from src.analyzers.network_discovery import NetworkDiscovery
-from src.analyzers.vulnerability_scanner import VulnerabilityScanner
-from src.analyzers.system_security_analyzer import SystemSecurityAnalyzer
 from src.analyzers.optimal_config_generator import OptimalConfigGenerator
+from src.analyzers.port_scanner import PortScanner
+from src.analyzers.radvd_analyzer import RadvdAnalyzer
+from src.analyzers.system_security_analyzer import SystemSecurityAnalyzer
+from src.analyzers.vlan_analyzer import VLANAnalyzer
+from src.analyzers.vulnerability_scanner import VulnerabilityScanner
+from src.config_loader import ConfigLoader
+from src.opnsense_client import OPNsenseClient
+from src.report_generator import ReportGenerator
 
 # Configure logging
 _log_handlers = [logging.StreamHandler(sys.stdout)]
@@ -103,16 +105,16 @@ class SecurityAuditor:
             logger.error(f"Failed to initialize OPNsense client: {e}")
             return False
 
-    def _get_scan_networks(self) -> List[str]:
+    def _get_scan_networks(self) -> list[str]:
         """Get list of networks to scan from config or environment"""
         import json
         networks = []
-        
+
         # First, check for saved network selection in config
         config_file = "/app/config/scan_networks.json"
         try:
             if os.path.exists(config_file):
-                with open(config_file, 'r') as f:
+                with open(config_file) as f:
                     config = json.load(f)
                 selected = config.get('selected_networks', [])
                 if selected:
@@ -122,15 +124,15 @@ class SecurityAuditor:
                         return networks
         except Exception as e:
             logger.debug(f"Could not load network config: {e}")
-        
+
         # Fallback to environment variables
         if self.scan_network:
             networks.append(self.scan_network)
-        
+
         additional_networks = os.getenv("ADDITIONAL_NETWORKS", "")
         if additional_networks:
             networks.extend([n.strip() for n in additional_networks.split(",")])
-        
+
         # Filter to only private networks
         import ipaddress
         private_networks = []
@@ -143,7 +145,7 @@ class SecurityAuditor:
                     logger.warning(f"Skipping non-private network: {net}")
             except ValueError:
                 logger.warning(f"Invalid network format: {net}")
-        
+
         logger.info(f"Scanning networks: {private_networks}")
         return private_networks
 
@@ -183,6 +185,14 @@ class SecurityAuditor:
 
         self.optimal_config_generator = OptimalConfigGenerator()
 
+        ipv6_strict = bool(self.exceptions.get("scan_options", {}).get("ipv6_strict", True))
+        self.ipv6_parity_analyzer = IPv6ParityAnalyzer(
+            self.config_loader.get_firewall_exceptions(),
+            strict=ipv6_strict,
+        )
+        self.gateway_analyzer = GatewayAnalyzer(self.config_loader.get_firewall_exceptions())
+        self.radvd_analyzer = RadvdAnalyzer(self.config_loader.get_firewall_exceptions())
+
         logger.info("All analyzers initialized")
 
     def _update_progress(self, step_name: str, step_number: int) -> bool:
@@ -197,28 +207,33 @@ class SecurityAuditor:
             self.scan_manager.log(level, message)
         logger.info(message)
 
+    def _update_stats(self, rules_checked: int = None, findings_count: int = None):
+        """Update scan statistics if scan_manager is available"""
+        if hasattr(self, 'scan_manager') and self.scan_manager:
+            self.scan_manager.update_stats(rules_checked=rules_checked, findings_count=findings_count)
+
     def _is_cancelled(self) -> bool:
         """Check if scan was cancelled"""
         if hasattr(self, 'scan_manager') and self.scan_manager:
             return self.scan_manager.is_cancelled()
         return False
 
-    def _get_wan_exposed_ports(self, nat_rules: List[Dict]) -> List[Dict]:
+    def _get_wan_exposed_ports(self, nat_rules: list[dict]) -> list[dict]:
         """Extract WAN-exposed port forwards from NAT rules"""
         exposed_ports = []
-        
+
         for rule in nat_rules:
             # Check if this is a port forward rule
             if not rule.get('enabled', True):
                 continue
-            
+
             # Get target/destination info
             target_ip = rule.get('target', rule.get('destination', {}).get('address', ''))
             target_port = rule.get('local-port', rule.get('destination', {}).get('port', ''))
             external_port = rule.get('source', {}).get('port', target_port)
             protocol = rule.get('protocol', 'tcp')
             description = rule.get('descr', rule.get('description', ''))
-            
+
             # Handle port ranges
             if target_port and '-' in str(target_port):
                 ports = str(target_port).split('-')
@@ -231,7 +246,7 @@ class SecurityAuditor:
                             'protocol': protocol,
                             'description': description
                         })
-                except:
+                except (TypeError, ValueError):
                     pass
             elif target_port:
                 try:
@@ -242,12 +257,12 @@ class SecurityAuditor:
                         'protocol': protocol,
                         'description': description
                     })
-                except:
+                except (TypeError, ValueError):
                     pass
-        
+
         return exposed_ports
 
-    def run_audit(self) -> Dict:
+    def run_audit(self) -> dict:
         """Run complete security audit"""
         logger.info("Starting security audit...")
 
@@ -260,6 +275,9 @@ class SecurityAuditor:
             "vlan_findings": [],
             "vulnerability_findings": [],
             "system_findings": [],
+            "ipv6_findings": [],
+            "gateway_findings": [],
+            "radvd_findings": [],
             "devices": [],
             "network_map": {},
             "statistics": {},
@@ -273,38 +291,39 @@ class SecurityAuditor:
         # Step 4: Collect data from OPNsense
         if not self._update_progress('Daten von OPNsense abrufen...', 4):
             return results
-        
+
         self._log('info', f'Verbinde zu OPNsense API ({self.opnsense_host})...')
-        
+
         self._log('check', 'Lade Firewall-Regeln...')
         firewall_rules = self.client.get_firewall_rules()
         self._log('success', f'{len(firewall_rules)} Firewall-Regeln geladen')
         results["statistics"]["firewall_rules"] = len(firewall_rules)
-        
+        self._update_stats(rules_checked=len(firewall_rules))
+
         self._log('check', 'Lade NAT-Regeln...')
         nat_rules = self.client.get_nat_rules()
         self._log('success', f'{len(nat_rules)} NAT-Regeln geladen')
         results["statistics"]["nat_rules"] = len(nat_rules)
-        
+
         self._log('check', 'Lade VLAN-Konfiguration...')
         vlans = self.client.get_vlans()
         self._log('success', f'{len(vlans)} VLANs geladen')
-        
+
         self._log('check', 'Lade Interface-Konfiguration...')
         interfaces = self.client.get_interfaces()
         self._log('success', f'{len(interfaces)} Interfaces geladen')
         results["statistics"]["interfaces"] = len(interfaces)
-        
+
         self._log('check', 'Lade DNS-Konfiguration (Unbound/Dnsmasq)...')
         dns_config = self.client.get_dns_config()
         results["dns_config"] = dns_config
         unbound_status = "aktiv" if dns_config.get("unbound", {}).get("enabled") == "1" else "inaktiv"
         self._log('success', f'DNS-Konfiguration geladen (Unbound: {unbound_status})')
-        
+
         self._log('check', 'Lade DHCP-Leases...')
         dhcp_leases = self.client.get_dhcp_leases()
         self._log('success', f'{len(dhcp_leases)} DHCP-Leases geladen')
-        
+
         self._log('check', 'Lade ARP-Tabelle...')
         arp_table = self.client.get_arp_table()
         self._log('success', f'{len(arp_table)} ARP-Einträge geladen')
@@ -315,19 +334,63 @@ class SecurityAuditor:
         # Analyze Firewall Rules
         if not self._update_progress('Firewall-Regeln analysieren...', 5):
             return results
-        
+
         self._log('check', f'Prüfe {len(firewall_rules)} Firewall-Regeln auf Sicherheitsprobleme...')
         self._log('check', 'Suche nach Any-to-Any Regeln...')
         self._log('check', 'Prüfe WAN-Zugriffsregeln...')
         self._log('check', 'Prüfe Logging-Einstellungen...')
         firewall_findings = self.firewall_analyzer.analyze(firewall_rules, nat_rules)
         results["firewall_findings"] = [asdict(f) for f in firewall_findings]
+        total_findings = len(firewall_findings)
+        self._update_stats(findings_count=total_findings)
         if firewall_findings:
             self._log('warning', f'{len(firewall_findings)} Firewall-Probleme gefunden')
             for f in firewall_findings[:3]:
                 self._log('warning', f'  → {f.issue}')
         else:
             self._log('success', 'Keine Firewall-Probleme gefunden')
+
+        # IPv6 parity and Default-Allow-LAN-IPv6 detection.
+        # Pass interfacesInfo so we know which interfaces have a global v6 right now.
+        self._log('check', 'Pruefe IPv6 Parity und Default-Allow-LAN-IPv6...')
+        ifaces_info_v6 = self.client.get_interfaces_info()
+        ipv6_findings = self.ipv6_parity_analyzer.analyze(firewall_rules, ifaces_info_v6)
+        results["ipv6_findings"] = [asdict(f) for f in ipv6_findings]
+        total_findings += len(ipv6_findings)
+        self._update_stats(findings_count=total_findings)
+        if ipv6_findings:
+            self._log('warning', f'{len(ipv6_findings)} IPv6-Probleme gefunden')
+            for f in ipv6_findings[:3]:
+                self._log('warning', f'  -> {f.issue}')
+        else:
+            self._log('success', 'IPv6 Regeln OK')
+
+        # Gateway hygiene
+        self._log('check', 'Lade Gateway-Konfiguration...')
+        gateways = self.client.get_gateway_settings()
+        gateway_findings = self.gateway_analyzer.analyze(gateways, firewall_rules)
+        results["gateway_findings"] = [asdict(f) for f in gateway_findings]
+        results["gateways"] = gateways
+        total_findings += len(gateway_findings)
+        self._update_stats(findings_count=total_findings)
+        if gateway_findings:
+            self._log('warning', f'{len(gateway_findings)} Gateway-Probleme gefunden')
+        else:
+            self._log('success', 'Gateways OK')
+
+        # Radvd
+        self._log('check', 'Pruefe Router Advertisements...')
+        radvd_entries = self.client.get_radvd_entries()
+        ifaces_info = self.client.get_interfaces_info()
+        radvd_findings = self.radvd_analyzer.analyze(radvd_entries, ifaces_info)
+        results["radvd_findings"] = [asdict(f) for f in radvd_findings]
+        results["radvd_entries"] = radvd_entries
+        total_findings += len(radvd_findings)
+        self._update_stats(findings_count=total_findings)
+        if radvd_findings:
+            self._log('warning', f'{len(radvd_findings)} RA-Probleme gefunden')
+        else:
+            self._log('success', 'RA Konfiguration OK')
 
         # Analyze DNS Configuration
         self._log('check', 'Analysiere DNS-Sicherheit...')
@@ -336,6 +399,8 @@ class SecurityAuditor:
         self._log('check', 'Prüfe DNS Rebinding-Schutz...')
         dns_findings = self.dns_analyzer.analyze(dns_config, self.opnsense_host)
         results["dns_findings"] = [asdict(f) for f in dns_findings]
+        total_findings += len(dns_findings)
+        self._update_stats(findings_count=total_findings)
         if dns_findings:
             self._log('warning', f'{len(dns_findings)} DNS-Probleme gefunden')
             for f in dns_findings[:3]:
@@ -347,6 +412,8 @@ class SecurityAuditor:
         self._log('check', f'Analysiere {len(vlans)} VLANs...')
         vlan_findings = self.vlan_analyzer.analyze(vlans, interfaces, firewall_rules)
         results["vlan_findings"] = [asdict(f) for f in vlan_findings]
+        total_findings += len(vlan_findings)
+        self._update_stats(findings_count=total_findings)
         if vlan_findings:
             self._log('warning', f'{len(vlan_findings)} VLAN-Probleme gefunden')
         else:
@@ -358,7 +425,7 @@ class SecurityAuditor:
         # Step 6: Network Discovery
         if not self._update_progress('Netzwerk-Geräte ermitteln...', 6):
             return results
-        
+
         self._log('check', 'Starte Netzwerk-Discovery...')
         networks = self._get_scan_networks()
         self._log('info', f'Scanning {len(networks)} networks: {", ".join(networks[:3])}{"..." if len(networks) > 3 else ""}')
@@ -379,20 +446,22 @@ class SecurityAuditor:
         # Step 7: System Security Analysis
         if not self._update_progress('System-Sicherheit prüfen...', 7):
             return results
-        
+
         self._log('check', 'Lade System-Sicherheitskonfiguration...')
         system_config = self.client.get_system_config()
-        
+
         self._log('check', 'Prüfe SSH-Konfiguration...')
         self._log('check', 'Prüfe Web-Admin-Interface...')
         self._log('check', 'Prüfe IDS/IPS-Status...')
         self._log('check', 'Prüfe VPN-Konfiguration...')
         self._log('check', 'Prüfe Logging & Backup...')
-        
+
         system_findings = self.system_security_analyzer.analyze(system_config)
         results["system_findings"] = [asdict(f) for f in system_findings]
         results["system_config"] = system_config
-        
+        total_findings += len(system_findings)
+        self._update_stats(findings_count=total_findings)
+
         if system_findings:
             self._log('warning', f'{len(system_findings)} System-Probleme gefunden')
             for f in system_findings[:3]:
@@ -404,10 +473,12 @@ class SecurityAuditor:
         self._log('check', 'Analysiere NAT-Regeln auf WAN-exponierte Ports...')
         wan_exposed_ports = self._get_wan_exposed_ports(nat_rules)
         self._log('info', f'{len(wan_exposed_ports)} WAN-exponierte Port-Forwards gefunden')
-        
+
         port_findings = self.port_scanner.scan_wan_exposed(wan_exposed_ports)
         results["port_findings"] = [asdict(f) for f in port_findings]
         results["wan_exposed_ports"] = wan_exposed_ports
+        total_findings += len(port_findings)
+        self._update_stats(findings_count=total_findings)
         if port_findings:
             self._log('warning', f'{len(port_findings)} kritische WAN-Ports gefunden')
         else:
@@ -444,10 +515,16 @@ class SecurityAuditor:
 
         results["vulnerability_findings"] = [asdict(f) for f in vuln_findings]
         results["vulnerability_summary"] = self.vulnerability_scanner.get_vulnerability_summary(vuln_findings)
+        total_findings += len(vuln_findings)
+        self._update_stats(findings_count=total_findings)
         logger.info(f"Found {len(vuln_findings)} known vulnerabilities")
 
         # Generate Summary
-        all_findings = firewall_findings + port_findings + dns_findings + vlan_findings + vuln_findings + system_findings
+        all_findings = (
+            firewall_findings + port_findings + dns_findings + vlan_findings
+            + vuln_findings + system_findings + ipv6_findings
+            + gateway_findings + radvd_findings
+        )
         results["summary"] = self._generate_summary(all_findings)
 
         # Generate Optimal Configuration Recommendations
@@ -464,7 +541,7 @@ class SecurityAuditor:
         logger.info("Security audit completed")
         return results
 
-    def _generate_summary(self, findings: List) -> Dict:
+    def _generate_summary(self, findings: list) -> dict:
         """Generate summary statistics"""
         summary = {
             "total_findings": len(findings),

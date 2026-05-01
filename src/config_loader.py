@@ -2,10 +2,10 @@
 Configuration Loader
 Loads and validates configuration from YAML files
 """
-import yaml
-import os
 import logging
-from typing import Dict, List
+import os
+
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -18,18 +18,18 @@ class ConfigLoader:
         self.rules = {}
         self.exceptions = {}
 
-    def load_all(self) -> tuple[Dict, Dict]:
+    def load_all(self) -> tuple[dict, dict]:
         """Load all configuration files"""
         self.rules = self.load_rules()
         self.exceptions = self.load_exceptions()
         return self.rules, self.exceptions
 
-    def load_rules(self) -> Dict:
+    def load_rules(self) -> dict:
         """Load security rules configuration"""
         rules_file = os.path.join(self.config_dir, "rules.yaml")
 
         try:
-            with open(rules_file, 'r', encoding='utf-8') as f:
+            with open(rules_file, encoding='utf-8') as f:
                 rules = yaml.safe_load(f)
                 logger.info(f"Loaded rules from {rules_file}")
                 return rules or self._get_default_rules()
@@ -40,13 +40,13 @@ class ConfigLoader:
             logger.error(f"Error parsing rules YAML: {e}")
             return self._get_default_rules()
 
-    def load_exceptions(self) -> Dict:
+    def load_exceptions(self) -> dict:
         """Load exceptions configuration"""
         exceptions_file = os.path.join(self.config_dir, "exceptions.yaml")
         defaults = self._get_default_exceptions()
 
         try:
-            with open(exceptions_file, 'r', encoding='utf-8') as f:
+            with open(exceptions_file, encoding='utf-8') as f:
                 exceptions = yaml.safe_load(f)
                 logger.info(f"Loaded exceptions from {exceptions_file}")
                 if not exceptions:
@@ -63,7 +63,7 @@ class ConfigLoader:
             logger.error(f"Error parsing exceptions YAML: {e}")
             return defaults
 
-    def _get_default_rules(self) -> Dict:
+    def _get_default_rules(self) -> dict:
         """Get default rules if file not found"""
         return {
             "critical_ports": [],
@@ -74,7 +74,7 @@ class ConfigLoader:
             "network_segmentation": {}
         }
 
-    def _get_default_exceptions(self) -> Dict:
+    def _get_default_exceptions(self) -> dict:
         """Get default exceptions if file not found"""
         return {
             "port_exceptions": [],
@@ -96,40 +96,40 @@ class ConfigLoader:
             }
         }
 
-    def get_scan_options(self) -> Dict:
+    def get_scan_options(self) -> dict:
         """Get scan options from exceptions config"""
         return self.exceptions.get("scan_options", self._get_default_exceptions()["scan_options"])
 
-    def get_report_options(self) -> Dict:
+    def get_report_options(self) -> dict:
         """Get report options from exceptions config"""
         return self.exceptions.get("report_options", self._get_default_exceptions()["report_options"])
 
-    def get_port_exceptions(self) -> List[Dict]:
+    def get_port_exceptions(self) -> list[dict]:
         """Get port exceptions"""
         return self.exceptions.get("port_exceptions") or []
 
-    def get_firewall_exceptions(self) -> List[Dict]:
+    def get_firewall_exceptions(self) -> list[dict]:
         """Get firewall exceptions"""
         return self.exceptions.get("firewall_exceptions") or []
 
-    def get_dns_exceptions(self) -> List[Dict]:
+    def get_dns_exceptions(self) -> list[dict]:
         """Get DNS exceptions"""
         return self.exceptions.get("dns_exceptions") or []
 
-    def get_vlan_exceptions(self) -> List[Dict]:
+    def get_vlan_exceptions(self) -> list[dict]:
         """Get VLAN exceptions"""
         return self.exceptions.get("vlan_exceptions") or []
 
-    def get_host_exceptions(self) -> List[str]:
+    def get_host_exceptions(self) -> list[str]:
         """Get list of hosts to exclude from scanning"""
         exceptions = self.exceptions.get("host_exceptions") or []
         return [exc.get("ip") for exc in exceptions if exc.get("ip")]
 
-    def get_system_exceptions(self) -> List[Dict]:
+    def get_system_exceptions(self) -> list[dict]:
         """Get system security exceptions"""
         return self.exceptions.get("system_exceptions") or []
 
-    def validate_config(self) -> List[str]:
+    def validate_config(self) -> list[str]:
         """Validate configuration and return list of warnings"""
         warnings = []
 

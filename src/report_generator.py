@@ -4,10 +4,9 @@ Outputs security audit data as HTML, JSON or plaintext
 """
 import json
 import logging
-from typing import Dict, List, Any
 from datetime import datetime
+
 from jinja2 import Template
-from tabulate import tabulate
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +14,11 @@ logger = logging.getLogger(__name__)
 class ReportGenerator:
     """Generates security audit reports"""
 
-    def __init__(self, report_options: Dict = None):
+    def __init__(self, report_options: dict = None):
         self.options = report_options or {}
         self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def generate_reports(self, audit_results: Dict, output_dir: str = "/app/reports") -> List[str]:
+    def generate_reports(self, audit_results: dict, output_dir: str = "/app/reports") -> list[str]:
         """Generate reports in configured formats"""
         generated_files = []
         output_format = self.options.get("output_format", "all")
@@ -43,7 +42,7 @@ class ReportGenerator:
 
         return generated_files
 
-    def _generate_json_report(self, results: Dict, output_file: str):
+    def _generate_json_report(self, results: dict, output_file: str):
         """Generate JSON report"""
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
@@ -52,7 +51,7 @@ class ReportGenerator:
         except Exception as e:
             logger.error(f"Failed to generate JSON report: {e}")
 
-    def _generate_text_report(self, results: Dict, output_file: str):
+    def _generate_text_report(self, results: dict, output_file: str):
         """Generate text report"""
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
@@ -61,7 +60,7 @@ class ReportGenerator:
         except Exception as e:
             logger.error(f"Failed to generate text report: {e}")
 
-    def _format_text_report(self, results: Dict) -> str:
+    def _format_text_report(self, results: dict) -> str:
         """Format results as text report"""
         lines = []
         lines.append("=" * 80)
@@ -341,7 +340,7 @@ class ReportGenerator:
 </html>
         """
 
-    def _generate_html_report(self, results: Dict, output_file: str):
+    def _generate_html_report(self, results: dict, output_file: str):
         """Generate HTML report with dark technical theme"""
         try:
             html_content = self.generate_html_report(results)
@@ -351,10 +350,9 @@ class ReportGenerator:
         except Exception as e:
             logger.error(f"Failed to generate HTML report: {e}")
 
-    def generate_html_report(self, results: Dict) -> str:
+    def generate_html_report(self, results: dict) -> str:
         """Generate HTML report and return as string (for API download)"""
         # Reuse the private method's template by rendering to string
-        from jinja2 import Template
         html_template = self._get_html_template()
         template = Template(html_template)
         return template.render(
@@ -373,7 +371,7 @@ class ReportGenerator:
             include_solutions=True
         )
 
-    def print_summary(self, results: Dict):
+    def print_summary(self, results: dict):
         """Print summary to console"""
         summary = results.get("summary", {})
 

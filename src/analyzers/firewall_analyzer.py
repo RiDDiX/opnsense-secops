@@ -3,7 +3,6 @@ Firewall Rule Analyzer
 Analyzes firewall rules for security issues
 """
 import logging
-from typing import Dict, List, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -18,11 +17,11 @@ class FirewallFinding:
     issue: str
     reason: str
     solution: str
-    rule_details: Dict
+    rule_details: dict
     interface: str = ""  # Target interface for the fix
-    implementation_steps: List[str] = None  # Step-by-step implementation guide
+    implementation_steps: list[str] = None  # Step-by-step implementation guide
     opnsense_path: str = ""  # OPNsense menu path to fix
-    
+
     def __post_init__(self):
         if self.implementation_steps is None:
             self.implementation_steps = []
@@ -31,11 +30,11 @@ class FirewallFinding:
 class FirewallAnalyzer:
     """Analyzes firewall rules for security issues"""
 
-    def __init__(self, rules_config: Dict, exceptions: List[Dict]):
+    def __init__(self, rules_config: dict, exceptions: list[dict]):
         self.rules_config = rules_config
         self.exceptions = exceptions
 
-    def analyze(self, firewall_rules: List[Dict], nat_rules: List[Dict]) -> List[FirewallFinding]:
+    def analyze(self, firewall_rules: list[dict], nat_rules: list[dict]) -> list[FirewallFinding]:
         """Analyze firewall and NAT rules"""
         findings = []
 
@@ -43,11 +42,80 @@ class FirewallAnalyzer:
         findings.extend(self._analyze_nat_rules(nat_rules))
         findings.extend(self._analyze_security_policies(firewall_rules))
         findings.extend(self._analyze_ipv6_rules(firewall_rules))
+        findings.extend(self._analyze_icmpv6_rules(firewall_rules))
         findings.extend(self._analyze_rule_ordering(firewall_rules))
 
         return findings
 
-    def _analyze_firewall_rules(self, rules: List[Dict]) -> List[FirewallFinding]:
+    # ICMPv6 default-pass list per src/etc/inc/filter.lib.inc#L230-L271:
+    # global types 1, 2, 3, 4, 135, 136 plus link-local 128, 129, 133, 134.
+    _ICMP6_DEFAULT_GLOBAL = {"1", "2", "3", "4", "135", "136"}
+    _ICMP6_DEFAULT_LOCAL = {"128", "129", "133", "134", "135", "136"}
+
+    def _analyze_icmpv6_rules(self, rules: list[dict]) -> list[FirewallFinding]:
+        """Flag pass rules for ICMPv6 that pass everything instead of typed entries."""
+        findings = []
+        allowed_total = self._ICMP6_DEFAULT_GLOBAL | self._ICMP6_DEFAULT_LOCAL
+        for rule in rules:
+            if str(rule.get("enabled", "0")) != "1":
+                continue
+            if rule.get("action") != "pass":
+                continue
+            proto = (rule.get("protocol") or "").lower()
+            if proto not in ("icmp", "icmpv6", "ipv6-icmp"):
+                continue
+            ipproto = rule.get("ipprotocol")
+            if ipproto not in ("inet6", "inet46"):
+                continue
+            icmp6 = (rule.get("icmp6type") or "").strip()
+            iface = rule.get("interface", "unknown") or "unknown"
+            if not icmp6:
+                findings.append(FirewallFinding(
+                    severity="HIGH",
+                    rule_id=rule.get("uuid", ""),
+                    rule_description=rule.get("description", "ICMPv6 pass without type list"),
+                    issue="ICMPv6 Pass Regel ohne icmp6type Beschraenkung",
+                    reason=(
+                        "OPNsense laesst ohne icmp6type alle ICMPv6 Typen zu. "
+                        "Mindestnotwendig sind die Typen aus filter.lib.inc: "
+                        "1, 2, 3, 4, 135, 136 global und 128, 129, 133, 134 link-local."
+                    ),
+                    solution="icmp6type auf die noetigen Typen einschraenken.",
+                    rule_details=rule,
+                    interface=iface,
+                    opnsense_path=f"Firewall > Rules > {iface.upper()}",
+                    implementation_steps=[
+                        "1. Regel in Firewall > Rules oeffnen.",
+                        "2. Feld 'ICMPv6 type' auf 1, 2, 3, 4, 135, 136 setzen.",
+                        "3. Speichern und Apply Changes.",
+                    ],
+                ))
+                continue
+            entries = {e.strip() for e in icmp6.split(",") if e.strip()}
+            unexpected = entries - allowed_total
+            if unexpected:
+                findings.append(FirewallFinding(
+                    severity="MEDIUM",
+                    rule_id=rule.get("uuid", ""),
+                    rule_description=rule.get("description", "ICMPv6 with non-default types"),
+                    issue=f"ICMPv6 Pass Regel mit unueblichen Typen: {sorted(unexpected)}",
+                    reason=(
+                        "Diese Typen liegen ausserhalb der Default Whitelist von OPNsense. "
+                        "Bewusste Konfiguration moeglich, sonst Risiko."
+                    ),
+                    solution="Liste auf die notwendigen Typen pruefen, sonst entfernen.",
+                    rule_details=rule,
+                    interface=iface,
+                    opnsense_path=f"Firewall > Rules > {iface.upper()}",
+                    implementation_steps=[
+                        "1. Regel oeffnen.",
+                        "2. ICMPv6 type Feld pruefen.",
+                        "3. Nicht benoetigte Typen entfernen.",
+                    ],
+                ))
+        return findings
+
+    def _analyze_firewall_rules(self, rules: list[dict]) -> list[FirewallFinding]:
         """Analyze firewall filter rules"""
         findings = []
 
@@ -57,7 +125,7 @@ class FirewallAnalyzer:
 
             iface = rule.get("interface", "unknown")
             rule_uuid = rule.get("uuid", "unknown")
-            
+
             # Check for any-to-any rules
             if self._is_any_to_any(rule):
                 findings.append(FirewallFinding(
@@ -148,7 +216,7 @@ class FirewallAnalyzer:
 
         return findings
 
-    def _analyze_nat_rules(self, rules: List[Dict]) -> List[FirewallFinding]:
+    def _analyze_nat_rules(self, rules: list[dict]) -> list[FirewallFinding]:
         """Analyze NAT port forwarding rules"""
         findings = []
 
@@ -160,7 +228,7 @@ class FirewallAnalyzer:
             # Support both normalized and raw field names from OPNsense 25.x API
             target_ip = rule.get("target", rule.get("redirect_target", rule.get("target_ip", "")))
             dst_port = rule.get("destination_port", rule.get("target_port", rule.get("local-port", "")))
-            
+
             # Check for port forwards to critical services
             if self._is_critical_port_forward(dst_port):
                 findings.append(FirewallFinding(
@@ -211,13 +279,13 @@ class FirewallAnalyzer:
 
         return findings
 
-    def _is_any_to_any(self, rule: Dict) -> bool:
+    def _is_any_to_any(self, rule: dict) -> bool:
         """Check if rule is a dangerous any-to-any rule.
-        
+
         Rules on internal interfaces (LAN, VLAN, VPN, OpenVPN, WireGuard, IPsec)
         with src=any dst=any are standard outbound access rules and NOT flagged.
         Only WAN or floating rules with any-to-any are truly dangerous.
-        
+
         Rules with specific destination_port and/or protocol are NOT any-to-any
         because they restrict traffic to a specific service.
         """
@@ -257,9 +325,9 @@ class FirewallAnalyzer:
         # WAN or floating/unknown interface with any-to-any is dangerous
         return True
 
-    def _is_insecure_wan_rule(self, rule: Dict) -> bool:
+    def _is_insecure_wan_rule(self, rule: dict) -> bool:
         """Check if rule allows insecure WAN access.
-        
+
         Only flags rules without port restrictions. Rules with specific
         destination_port are targeted forwards, not unrestricted WAN access.
         """
@@ -282,7 +350,7 @@ class FirewallAnalyzer:
 
         return is_wan and is_incoming and is_allow and is_broad_destination
 
-    def _should_have_logging(self, rule: Dict) -> bool:
+    def _should_have_logging(self, rule: dict) -> bool:
         """Determine if rule should have logging enabled"""
         interface = rule.get("interface", "").lower()
         action = rule.get("action", "").lower()
@@ -290,13 +358,13 @@ class FirewallAnalyzer:
         # WAN rules and block rules should be logged
         return "wan" in interface or action == "block"
 
-    def _has_logging(self, rule: Dict) -> bool:
+    def _has_logging(self, rule: dict) -> bool:
         """Check if rule has logging enabled"""
         return rule.get("log", "0") == "1"
 
-    def _is_overly_permissive(self, rule: Dict) -> bool:
+    def _is_overly_permissive(self, rule: dict) -> bool:
         """Check if rule is overly permissive with protocols.
-        
+
         Only flag on WAN or floating rules. Internal/VPN interfaces
         commonly use protocol 'any' for standard outbound access.
         """
@@ -332,13 +400,13 @@ class FirewallAnalyzer:
 
         return False
 
-    def _has_unrestricted_source(self, rule: Dict) -> bool:
+    def _has_unrestricted_source(self, rule: dict) -> bool:
         """Check if NAT rule has unrestricted source"""
         # Check both normalized and raw field names
         src = rule.get("source", rule.get("source_net", "")).lower()
         return src in ["any", "", "0.0.0.0/0", "::/0"]
 
-    def _analyze_security_policies(self, rules: List[Dict]) -> List[FirewallFinding]:
+    def _analyze_security_policies(self, rules: list[dict]) -> list[FirewallFinding]:
         """Analyze overall security policies"""
         findings = []
 
@@ -470,7 +538,7 @@ class FirewallAnalyzer:
 
         return findings
 
-    def _analyze_ipv6_rules(self, rules: List[Dict]) -> List[FirewallFinding]:
+    def _analyze_ipv6_rules(self, rules: list[dict]) -> list[FirewallFinding]:
         """Analyze IPv6 specific rules"""
         findings = []
 
@@ -518,7 +586,7 @@ class FirewallAnalyzer:
 
         return findings
 
-    def _analyze_rule_ordering(self, rules: List[Dict]) -> List[FirewallFinding]:
+    def _analyze_rule_ordering(self, rules: list[dict]) -> list[FirewallFinding]:
         """Analyze rule ordering for potential issues"""
         findings = []
 
@@ -572,7 +640,7 @@ class FirewallAnalyzer:
 
         return findings
 
-    def get_optimal_firewall_config(self) -> Dict:
+    def get_optimal_firewall_config(self) -> dict:
         """Return optimal firewall configuration recommendations"""
         return {
             "recommended_policies": [

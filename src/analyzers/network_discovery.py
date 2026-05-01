@@ -2,13 +2,13 @@
 Network Discovery
 Discovers and maps all devices in the network
 """
-import logging
-import nmap
-import socket
-from typing import Dict, List, Set
-from dataclasses import dataclass
-from collections import defaultdict
 import ipaddress
+import logging
+import socket
+from collections import defaultdict
+from dataclasses import dataclass
+
+import nmap
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +23,8 @@ class NetworkDevice:
     network: str
     vlan: str
     status: str
-    open_ports: List[int]
-    services: Dict[int, str]
+    open_ports: list[int]
+    services: dict[int, str]
     os_guess: str
     last_seen: str
 
@@ -32,12 +32,12 @@ class NetworkDevice:
 class NetworkDiscovery:
     """Discovers and analyzes network devices"""
 
-    def __init__(self, scan_options: Dict):
+    def __init__(self, scan_options: dict):
         self.scan_options = scan_options
         self.nm = nmap.PortScanner()
 
     @staticmethod
-    def _extract_field(entry: Dict, keys: tuple) -> str:
+    def _extract_field(entry: dict, keys: tuple) -> str:
         """Extract a value from a dict trying multiple possible field names"""
         for key in keys:
             val = entry.get(key, '')
@@ -65,11 +65,11 @@ class NetworkDiscovery:
                 return hostname
             finally:
                 socket.setdefaulttimeout(old_timeout)
-        except (socket.herror, socket.gaierror, socket.timeout, OSError):
+        except (TimeoutError, socket.herror, socket.gaierror, OSError):
             return ""
 
-    def discover_network(self, networks: List[str], dhcp_leases: List[Dict],
-                        arp_table: List[Dict], vlans: List[Dict]) -> List[NetworkDevice]:
+    def discover_network(self, networks: list[str], dhcp_leases: list[dict],
+                        arp_table: list[dict], vlans: list[dict]) -> list[NetworkDevice]:
         """Discover all devices in specified networks (private IPs only)"""
         devices = []
 
@@ -151,7 +151,7 @@ class NetworkDiscovery:
 
         return devices
 
-    def _scan_network(self, network: str) -> List[Dict]:
+    def _scan_network(self, network: str) -> list[dict]:
         """Scan network for devices (only private IPs)"""
         devices = []
 
@@ -247,10 +247,10 @@ class NetworkDiscovery:
         # For now, return Unknown
         return "Unknown"
 
-    def _determine_vlan(self, ip: str, vlans: List[Dict]) -> str:
+    def _determine_vlan(self, ip: str, vlans: list[dict]) -> str:
         """Determine which VLAN an IP belongs to"""
         try:
-            ip_obj = ipaddress.ip_address(ip)
+            ipaddress.ip_address(ip)
 
             # Match IP to VLAN based on subnet
             # This is simplified - in reality you'd need subnet info from VLANs
@@ -266,7 +266,7 @@ class NetworkDiscovery:
 
         return "Unknown"
 
-    def _determine_network(self, ip: str, networks: List[str]) -> str:
+    def _determine_network(self, ip: str, networks: list[str]) -> str:
         """Determine which network an IP belongs to"""
         try:
             ip_obj = ipaddress.ip_address(ip)
@@ -281,7 +281,7 @@ class NetworkDiscovery:
 
         return "Unknown"
 
-    def generate_network_map(self, devices: List[NetworkDevice]) -> Dict:
+    def generate_network_map(self, devices: list[NetworkDevice]) -> dict:
         """Generate network topology map"""
         network_map = defaultdict(lambda: defaultdict(list))
 
@@ -300,7 +300,7 @@ class NetworkDiscovery:
 
         return dict(network_map)
 
-    def get_device_statistics(self, devices: List[NetworkDevice]) -> Dict:
+    def get_device_statistics(self, devices: list[NetworkDevice]) -> dict:
         """Get statistics about discovered devices"""
         stats = {
             "total_devices": len(devices),

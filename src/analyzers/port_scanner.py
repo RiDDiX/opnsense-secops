@@ -2,12 +2,12 @@
 Port Scanner
 Scans for open ports and identifies critical services
 """
-import logging
-import nmap
 import ipaddress
-from typing import Dict, List
-from dataclasses import dataclass
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+
+import nmap
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +23,13 @@ class PortFinding:
     reason: str
     solution: str
     state: str = "open"
-    details: Dict = None
+    details: dict = None
 
 
 class PortScanner:
     """Scans network for open ports and security issues"""
 
-    def __init__(self, rules_config: Dict, exceptions: List[Dict], scan_options: Dict):
+    def __init__(self, rules_config: dict, exceptions: list[dict], scan_options: dict):
         self.rules_config = rules_config
         self.exceptions = exceptions
         self.scan_options = scan_options
@@ -63,7 +63,7 @@ class PortScanner:
         except ValueError:
             return False
 
-    def scan_network(self, network: str, hosts: List[str] = None) -> List[PortFinding]:
+    def scan_network(self, network: str, hosts: list[str] = None) -> list[PortFinding]:
         """Scan network or specific hosts for open ports (internal networks only)"""
         findings = []
 
@@ -71,12 +71,12 @@ class PortScanner:
             # Filter to only scan private/internal IPs
             internal_hosts = [h for h in hosts if self._is_private_ip(h)]
             external_hosts = [h for h in hosts if not self._is_private_ip(h)]
-            
+
             if external_hosts:
                 logger.info(f"Skipping {len(external_hosts)} external IPs (not scanning public internet)")
-            
+
             logger.info(f"Scanning {len(internal_hosts)} internal hosts")
-            
+
             # Scan internal hosts
             for host in internal_hosts:
                 findings.extend(self._scan_host(host))
@@ -97,31 +97,31 @@ class PortScanner:
         except ValueError:
             return False
 
-    def scan_wan_exposed(self, wan_exposed_ports: List[Dict]) -> List[PortFinding]:
+    def scan_wan_exposed(self, wan_exposed_ports: list[dict]) -> list[PortFinding]:
         """Check WAN-exposed ports for security issues - only these are flagged"""
         findings = []
-        
+
         if not wan_exposed_ports:
             logger.info("No WAN-exposed port forwards found - internal ports are not security issues")
             return findings
-        
+
         logger.info(f"Checking {len(wan_exposed_ports)} WAN-exposed port forwards for security issues")
-        
+
         for exposed in wan_exposed_ports:
             port = exposed.get('internal_port') or exposed.get('external_port')
             internal_ip = exposed.get('internal_ip', '')
             external_port = exposed.get('external_port', port)
             description = exposed.get('description', '')
             protocol = exposed.get('protocol', 'tcp')
-            
+
             if not port:
                 continue
-            
+
             # Check if this is an excepted port
             if self._is_excepted(internal_ip, port):
                 logger.debug(f"Port {port} on {internal_ip} is excepted")
                 continue
-            
+
             # Check if this is a critical port
             if port in self.critical_ports:
                 port_info = self.critical_ports[port]
@@ -161,10 +161,10 @@ class PortScanner:
                         "wan_exposed": True
                     }
                 ))
-        
+
         return findings
 
-    def _scan_network_range(self, network: str) -> List[PortFinding]:
+    def _scan_network_range(self, network: str) -> list[PortFinding]:
         """Scan entire network range"""
         findings = []
 
@@ -199,7 +199,7 @@ class PortScanner:
 
         return findings
 
-    def _scan_host(self, host: str) -> List[PortFinding]:
+    def _scan_host(self, host: str) -> list[PortFinding]:
         """Scan a single host for open ports"""
         findings = []
 
@@ -215,7 +215,7 @@ class PortScanner:
             port_range = ','.join(map(str, sorted(all_ports)))
 
             # Perform SYN scan
-            arguments = f'-sS -sV --version-intensity 5 -T4'
+            arguments = '-sS -sV --version-intensity 5 -T4'
             if self.scan_options.get("aggressive_scan", False):
                 arguments += ' -A'
 
@@ -239,7 +239,7 @@ class PortScanner:
 
         return findings
 
-    def _analyze_open_port(self, host: str, port: int, port_info: Dict) -> PortFinding:
+    def _analyze_open_port(self, host: str, port: int, port_info: dict) -> PortFinding:
         """Analyze if an open port is a security issue"""
 
         # Check if port is in exceptions
@@ -310,7 +310,7 @@ class PortScanner:
 
         return solutions.get(port, f"Schließe Port {port} in der Firewall oder beschränke Zugriff auf vertrauenswürdige IPs")
 
-    def get_scan_summary(self, findings: List[PortFinding]) -> Dict:
+    def get_scan_summary(self, findings: list[PortFinding]) -> dict:
         """Generate summary statistics"""
         return {
             "total_findings": len(findings),

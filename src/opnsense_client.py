@@ -1,11 +1,11 @@
 """
-OPNsense API Client
-Handles communication with OPNsense 25.x API
+OPNsense API client. Talks to 25.7 and 26.x.
+Field mapping follows opnsense/core models, not assumptions.
 """
+import logging
+
 import requests
 import urllib3
-from typing import Dict, List, Optional, Any, Union
-import logging
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -26,9 +26,9 @@ class OPNsenseClient:
         self.session.auth = (api_key, api_secret)
         self.session.verify = verify_ssl
 
-    def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, silent: bool = False) -> Dict:
+    def _make_request(self, method: str, endpoint: str, data: dict | None = None, silent: bool = False) -> dict:
         """Make HTTP request to OPNsense API
-        
+
         Args:
             method: HTTP method (GET/POST)
             endpoint: API endpoint
@@ -52,7 +52,7 @@ class OPNsenseClient:
                 logger.error(f"API request failed: {e}")
             raise
 
-    def get_firewall_rules(self) -> List[Dict]:
+    def get_firewall_rules(self) -> list[dict]:
         """Get firewall filter rules via /api/firewall/filter/searchRule"""
         try:
             result = self._make_request("POST", "/firewall/filter/searchRule")
@@ -63,35 +63,74 @@ class OPNsenseClient:
             logger.error(f"Failed to get firewall rules: {e}")
             return []
 
-    def _normalize_firewall_rules(self, rules: List[Dict]) -> List[Dict]:
-        """Normalize firewall rule fields for consistent analysis"""
+    def _normalize_firewall_rules(self, rules: list[dict]) -> list[dict]:
+        """Map searchRule rows to a flat dict that matches the 26.x Filter model."""
         normalized = []
         for rule in rules:
+            prio_group = str(rule.get("prio_group", "") or "")
+            interfacenot = str(rule.get("interfacenot", "0") or "0")
+            # In OPNsense, floating rules carry prio_group 200000 (Floating)
+            # or use interfacenot to invert the interface match.
+            is_floating = prio_group.startswith("200000") or interfacenot == "1"
+            interfaces = [i for i in str(rule.get("interface", "") or "").split(",") if i]
             norm = {
                 "uuid": rule.get("uuid", ""),
-                "enabled": rule.get("enabled", "0"),
+                "enabled": str(rule.get("enabled", "0") or "0"),
                 "sequence": rule.get("sequence", 0),
+                "sort_order": rule.get("sort_order", ""),
+                "prio_group": prio_group,
+                "is_floating": is_floating,
+                "is_group_rule": prio_group.startswith("300000"),
+                "interfaces": interfaces,
                 "description": rule.get("description", ""),
                 "interface": rule.get("interface", ""),
+                "interfacenot": interfacenot,
                 "direction": rule.get("direction", "in"),
                 "ipprotocol": rule.get("ipprotocol", "inet"),
                 "protocol": rule.get("protocol", "any"),
+                "icmptype": rule.get("icmptype", ""),
+                "icmp6type": rule.get("icmp6type", ""),
                 "source_net": rule.get("source_net", "any"),
                 "source_port": rule.get("source_port", ""),
+                "source_not": str(rule.get("source_not", "0") or "0"),
                 "destination_net": rule.get("destination_net", "any"),
                 "destination_port": rule.get("destination_port", ""),
+                "destination_not": str(rule.get("destination_not", "0") or "0"),
                 "action": rule.get("action", "pass"),
-                "log": rule.get("log", "0"),
-                "quick": rule.get("quick", "1"),
-                "_raw": rule
+                "log": str(rule.get("log", "0") or "0"),
+                "quick": str(rule.get("quick", "1") or "1"),
+                "gateway": rule.get("gateway", ""),
+                "replyto": rule.get("replyto", ""),
+                "disablereplyto": str(rule.get("disablereplyto", "0") or "0"),
+                "categories": rule.get("categories", ""),
+                "categories_named": rule.get("%categories", ""),
+                "tag": rule.get("tag", ""),
+                "tagged": rule.get("tagged", ""),
+                "set-prio": rule.get("set-prio", ""),
+                "sched": rule.get("sched", ""),
+                "statetimeout": rule.get("statetimeout", ""),
+                "udp-first": rule.get("udp-first", ""),
+                "udp-multiple": rule.get("udp-multiple", ""),
+                "udp-single": rule.get("udp-single", ""),
+                "max-src-conn": rule.get("max-src-conn", ""),
+                "max-src-states": rule.get("max-src-states", ""),
+                "max-src-conn-rate": rule.get("max-src-conn-rate", ""),
+                "max-src-conn-rates": rule.get("max-src-conn-rates", ""),
+                "tcpflags1": rule.get("tcpflags1", ""),
+                "tcpflags2": rule.get("tcpflags2", ""),
+                "tcpflags_any": str(rule.get("tcpflags_any", "0") or "0"),
+                "divert-to": rule.get("divert-to", ""),
+                "statetype": rule.get("statetype", ""),
+                "state-policy": rule.get("state-policy", ""),
+                "_raw": rule,
             }
             normalized.append(norm)
         return normalized
 
-    def get_nat_rules(self) -> List[Dict]:
+    def get_nat_rules(self) -> list[dict]:
         """Get all NAT rules (Port Forward, Source NAT, 1:1, NPT)"""
         nat_rules = []
-        
+
         # Port Forward rules (most common)
         try:
             result = self._make_request("POST", "/firewall/nat/search_rule", silent=True)
@@ -100,7 +139,7 @@ class OPNsenseClient:
                 nat_rules.append(self._normalize_nat_rule(rule))
         except Exception:
             pass
-        
+
         # Source NAT / Outbound
         try:
             result = self._make_request("POST", "/firewall/source_nat/searchRule")
@@ -109,7 +148,7 @@ class OPNsenseClient:
                 nat_rules.append(self._normalize_nat_rule(rule))
         except Exception as e:
             logger.debug(f"Source NAT: {e}")
-        
+
         # 1:1 NAT
         try:
             result = self._make_request("POST", "/firewall/one_to_one/searchRule")
@@ -118,7 +157,7 @@ class OPNsenseClient:
                 nat_rules.append(self._normalize_nat_rule(rule))
         except Exception as e:
             logger.debug(f"1:1 NAT: {e}")
-        
+
         # NPT (IPv6)
         try:
             result = self._make_request("POST", "/firewall/npt/searchRule")
@@ -127,11 +166,11 @@ class OPNsenseClient:
                 nat_rules.append(self._normalize_nat_rule(rule))
         except Exception as e:
             logger.debug(f"NPT: {e}")
-        
+
         logger.info(f"Retrieved {len(nat_rules)} NAT rules")
         return nat_rules
 
-    def _normalize_nat_rule(self, rule: Dict) -> Dict:
+    def _normalize_nat_rule(self, rule: dict) -> dict:
         """Normalize NAT rule fields"""
         return {
             "uuid": rule.get("uuid", ""),
@@ -148,10 +187,10 @@ class OPNsenseClient:
             "_raw": rule
         }
 
-    def get_interfaces(self) -> Dict:
+    def get_interfaces(self) -> dict:
         """Get all network interfaces from multiple sources"""
         interfaces = {}
-        
+
         # Method 1: Try overview/export (newer API)
         try:
             result = self._make_request("GET", "/interfaces/overview/export", silent=True)
@@ -160,7 +199,7 @@ class OPNsenseClient:
                 logger.debug(f"Got {len(result)} interfaces from overview/export")
         except Exception:
             pass
-        
+
         # Method 2: Try diagnostics/interface/getInterfaceConfig
         try:
             result = self._make_request("GET", "/diagnostics/interface/getInterfaceConfig", silent=True)
@@ -171,7 +210,7 @@ class OPNsenseClient:
                 logger.debug(f"Got {len(result)} interfaces from getInterfaceConfig")
         except Exception:
             pass
-        
+
         # Method 3: Try legacy config endpoint
         try:
             result = self._make_request("GET", "/diagnostics/interface/getInterfaceNames", silent=True)
@@ -182,11 +221,11 @@ class OPNsenseClient:
                 logger.debug(f"Got {len(result)} interface names")
         except Exception:
             pass
-        
+
         logger.info(f"Total interfaces found: {len(interfaces)} - {list(interfaces.keys())}")
         return interfaces
 
-    def get_vlans(self) -> List[Dict]:
+    def get_vlans(self) -> list[dict]:
         """Get VLAN configuration"""
         try:
             # Use POST for search_item per OPNsense API docs
@@ -196,10 +235,10 @@ class OPNsenseClient:
             logger.debug(f"Failed to get VLANs: {e}")
             return []
 
-    def get_dhcp_leases(self) -> List[Dict]:
+    def get_dhcp_leases(self) -> list[dict]:
         """Get DHCP leases from various possible endpoints"""
         leases = []
-        
+
         # Method 1: ISC DHCP leases plugin (older)
         try:
             result = self._make_request("GET", "/dhcpleases/service/get", silent=True)
@@ -212,7 +251,7 @@ class OPNsenseClient:
                         return leases if isinstance(leases, list) else [leases]
         except Exception:
             pass  # Silently try next method
-        
+
         # Method 2: Kea DHCP4 leases (newer)
         try:
             result = self._make_request("POST", "/kea/leases4/search", silent=True)
@@ -223,7 +262,7 @@ class OPNsenseClient:
                     return leases
         except Exception:
             pass
-        
+
         # Method 3: Kea DHCP4 search
         try:
             result = self._make_request("POST", "/kea/dhcpv4/searchLease", silent=True)
@@ -234,7 +273,7 @@ class OPNsenseClient:
                     return leases
         except Exception:
             pass
-        
+
         # Method 4: ISC DHCP service status
         try:
             result = self._make_request("GET", "/dhcpv4/leases/searchLease", silent=True)
@@ -245,11 +284,11 @@ class OPNsenseClient:
                     return leases
         except Exception:
             pass
-        
+
         logger.debug("No DHCP leases found from any endpoint")
         return []
 
-    def get_arp_table(self) -> List[Dict]:
+    def get_arp_table(self) -> list[dict]:
         """Get ARP table"""
         try:
             result = self._make_request("GET", "/diagnostics/interface/getArp")
@@ -258,16 +297,17 @@ class OPNsenseClient:
             logger.debug(f"Failed to get ARP table: {e}")
             return []
 
-    def get_dns_config(self) -> Dict:
+    def get_dns_config(self) -> dict:
         """Get DNS configuration via OPNsense 25.x API"""
         config = {
             "unbound": {},
             "dnsmasq": {},
             "system_dns": [],
             "dhcp_dns_servers": [],
+            "dhcpv6_dns_servers": [],
             "forward_servers": []
         }
-        
+
         # Unbound general settings via /api/unbound/settings/get
         try:
             result = self._make_request("GET", "/unbound/settings/get")
@@ -279,7 +319,7 @@ class OPNsenseClient:
                 logger.info(f"Unbound config retrieved, enabled={config['unbound'].get('enabled', 'unknown')}")
         except Exception as e:
             logger.debug(f"Unbound settings: {e}")
-        
+
         # Unbound forwarding servers via /api/unbound/settings/searchForward
         try:
             result = self._make_request("POST", "/unbound/settings/searchForward")
@@ -296,7 +336,7 @@ class OPNsenseClient:
                 logger.info(f"Found {len(config['forward_servers'])} DNS forwarders")
         except Exception as e:
             logger.debug(f"Unbound forwards: {e}")
-        
+
         # Dnsmasq via /api/dnsmasq/settings/get
         try:
             result = self._make_request("GET", "/dnsmasq/settings/get")
@@ -308,10 +348,10 @@ class OPNsenseClient:
                 }
         except Exception as e:
             logger.debug(f"Dnsmasq: {e}")
-        
+
         # System DNS servers via /api/core/system/generalSettings/get
         try:
-            result = self._make_request("GET", "/core/system/generalSettings/get")
+            result = self._make_request("GET", "/core/system/generalSettings/get", silent=True)
             if result:
                 general = result.get("general", {})
                 for i in range(1, 5):
@@ -320,14 +360,14 @@ class OPNsenseClient:
                         config["system_dns"].append(dns.strip())
         except Exception as e:
             logger.debug(f"System DNS: {e}")
-        
-        # DHCPv4 DNS settings via /api/dhcpv4/settings/get
+
+        # Legacy ISC DHCPv4 settings, removed from core in 26.1, kept silent for older releases.
         try:
-            result = self._make_request("GET", "/dhcpv4/settings/get")
+            result = self._make_request("GET", "/dhcpv4/settings/get", silent=True)
             if result:
                 dhcp = result.get("dhcpv4", result)
                 if isinstance(dhcp, dict):
-                    for key, iface in dhcp.items():
+                    for _key, iface in dhcp.items():
                         if isinstance(iface, dict):
                             dns = iface.get("dns_servers", iface.get("dnsserver", ""))
                             if dns:
@@ -336,26 +376,34 @@ class OPNsenseClient:
                                         config["dhcp_dns_servers"].append(d.strip())
         except Exception as e:
             logger.debug(f"DHCP DNS: {e}")
-        
-        # Kea DHCPv4 DNS (newer OPNsense)
+
+        # Kea v4 DNS via searchSubnet (subnets are rows, not a dict)
         try:
-            result = self._make_request("GET", "/kea/dhcpv4/get")
-            if result:
-                kea = result.get("dhcpv4", result)
-                if isinstance(kea, dict):
-                    for key, subnet in kea.get("subnets", {}).items():
-                        if isinstance(subnet, dict):
-                            dns = subnet.get("option_data_dns_servers", "")
-                            if dns:
-                                for d in str(dns).split(","):
-                                    if d.strip() and d.strip() not in config["dhcp_dns_servers"]:
-                                        config["dhcp_dns_servers"].append(d.strip())
+            for row in self.get_kea_dhcpv4_subnets():
+                dns = row.get("option_data.domain_name_servers", "")
+                if dns:
+                    for d in str(dns).split(","):
+                        d = d.strip()
+                        if d and d not in config["dhcp_dns_servers"]:
+                            config["dhcp_dns_servers"].append(d)
         except Exception as e:
-            logger.debug(f"Kea DHCP: {e}")
-        
+            logger.debug(f"Kea v4 subnets: {e}")
+
+        # Kea v6 DNS, mirrors v4 path
+        try:
+            for row in self.get_kea_dhcpv6_subnets():
+                dns = row.get("option_data.dns_servers", "")
+                if dns:
+                    for d in str(dns).split(","):
+                        d = d.strip()
+                        if d and d not in config["dhcpv6_dns_servers"]:
+                            config["dhcpv6_dns_servers"].append(d)
+        except Exception as e:
+            logger.debug(f"Kea v6 subnets: {e}")
+
         return config
 
-    def _normalize_unbound_config(self, unbound: Dict) -> Dict:
+    def _normalize_unbound_config(self, unbound: dict) -> dict:
         """Normalize Unbound config fields"""
         return {
             "enabled": unbound.get("enabled", unbound.get("enable", "0")),
@@ -371,7 +419,7 @@ class OPNsenseClient:
             "_raw": unbound
         }
 
-    def get_alias_list(self) -> List[Dict]:
+    def get_alias_list(self) -> list[dict]:
         """Get firewall aliases"""
         try:
             result = self._make_request("POST", "/firewall/alias/search_item")
@@ -380,7 +428,7 @@ class OPNsenseClient:
             logger.debug(f"Failed to get aliases: {e}")
             return []
 
-    def get_system_info(self) -> Dict:
+    def get_system_info(self) -> dict:
         """Get system information"""
         try:
             result = self._make_request("GET", "/core/system/status")
@@ -389,7 +437,7 @@ class OPNsenseClient:
             logger.error(f"Failed to get system info: {e}")
             return {}
 
-    def get_routes(self) -> List[Dict]:
+    def get_routes(self) -> list[dict]:
         """Get routing table"""
         try:
             result = self._make_request("GET", "/routes/gateway/status")
@@ -408,7 +456,7 @@ class OPNsenseClient:
             logger.error(f"Failed to connect to OPNsense: {e}")
             return False
 
-    def get_system_config(self) -> Dict:
+    def get_system_config(self) -> dict:
         """Fetch system security settings via OPNsense 25.x API"""
         config = {
             "ssh": {},
@@ -483,7 +531,7 @@ class OPNsenseClient:
 
         # General via /api/core/system/generalSettings/get
         try:
-            result = self._make_request("GET", "/core/system/generalSettings/get")
+            result = self._make_request("GET", "/core/system/generalSettings/get", silent=True)
             general = result.get("general", result.get("settings", {}))
             config["general"] = {
                 "hostname": general.get("hostname", ""),
@@ -518,7 +566,7 @@ class OPNsenseClient:
             syslog = result.get("syslog", result.get("settings", {}))
             destinations = syslog.get("destinations", {})
             has_remote = any(
-                isinstance(d, dict) and d.get("enabled", "0") == "1" 
+                isinstance(d, dict) and d.get("enabled", "0") == "1"
                 for d in destinations.values()
             ) if isinstance(destinations, dict) else False
             config["logging"] = {
@@ -567,10 +615,10 @@ class OPNsenseClient:
 
         return config
 
-    def _get_vpn_security_config(self) -> Dict:
+    def _get_vpn_security_config(self) -> dict:
         """Get VPN security-relevant settings"""
         vpn = {"openvpn": {"servers": []}, "ipsec": {}, "wireguard": {}}
-        
+
         # OpenVPN servers
         try:
             result = self._make_request("GET", "/openvpn/export/providers")
@@ -586,7 +634,7 @@ class OPNsenseClient:
                         })
         except Exception as e:
             logger.debug(f"OpenVPN export: {e}")
-        
+
         # OpenVPN instances
         try:
             result = self._make_request("POST", "/openvpn/instances/search")
@@ -600,7 +648,7 @@ class OPNsenseClient:
                 })
         except Exception as e:
             logger.debug(f"OpenVPN instances: {e}")
-        
+
         # IPsec
         try:
             result = self._make_request("GET", "/ipsec/tunnel/searchPhase1")
@@ -609,7 +657,7 @@ class OPNsenseClient:
                 vpn["ipsec"]["phase1"] = result.get("rows", [])
         except Exception as e:
             logger.debug(f"IPsec: {e}")
-        
+
         # WireGuard
         try:
             result = self._make_request("GET", "/wireguard/general/get")
@@ -618,16 +666,16 @@ class OPNsenseClient:
                 vpn["wireguard"]["enabled"] = wg.get("enabled", "0")
         except Exception as e:
             logger.debug(f"WireGuard: {e}")
-        
+
         try:
             result = self._make_request("POST", "/wireguard/client/searchClient")
             vpn["wireguard"]["peers"] = result.get("rows", [])
         except Exception as e:
             logger.debug(f"WireGuard peers: {e}")
-        
+
         return vpn
 
-    def get_certificates(self) -> List[Dict]:
+    def get_certificates(self) -> list[dict]:
         """Get SSL/TLS certificates"""
         try:
             result = self._make_request("POST", "/trust/cert/search")
@@ -636,7 +684,7 @@ class OPNsenseClient:
             logger.debug(f"Failed to get certificates: {e}")
             return []
 
-    def get_vpn_config(self) -> Dict:
+    def get_vpn_config(self) -> dict:
         """Get VPN configurations"""
         vpn_config = {"openvpn": [], "wireguard": [], "ipsec": {}}
 
@@ -660,19 +708,126 @@ class OPNsenseClient:
 
         return vpn_config
 
-    def get_firewall_settings(self) -> Dict:
-        """Get firewall advanced settings"""
+    def get_firewall_settings(self) -> dict:
+        """Read firewall model defaults via the concrete Filter controller."""
+        # filter_base/get hits an abstract controller (returns 404 in 26.x),
+        # so we use filter/get which inherits getAction from ApiMutableModelControllerBase.
         try:
-            result = self._make_request("GET", "/firewall/filter_base/get")
-            return result
+            result = self._make_request("GET", "/firewall/filter/get")
+            return result.get("filter", result) if isinstance(result, dict) else {}
         except Exception as e:
             logger.debug(f"Failed to get firewall settings: {e}")
             return {}
 
-    def get_legacy_config(self, section: str) -> Dict:
+    def add_firewall_rule(self, rule_payload: dict) -> dict:
+        """Create a new filter rule. Body shape: {'rule': {...fields...}}."""
+        try:
+            return self._make_request("POST", "/firewall/filter/addRule", data=rule_payload)
+        except Exception as e:
+            logger.error(f"addRule failed: {e}")
+            raise
+
+    def delete_firewall_rule(self, uuid: str) -> dict:
+        """Remove a filter rule by uuid."""
+        try:
+            return self._make_request("POST", f"/firewall/filter/delRule/{uuid}")
+        except Exception as e:
+            logger.error(f"delRule failed: {e}")
+            raise
+
+    def apply_firewall_changes(self) -> dict:
+        """Reload pf to make staged rule changes effective."""
+        try:
+            return self._make_request("POST", "/firewall/filter/apply")
+        except Exception as e:
+            logger.error(f"apply failed: {e}")
+            raise
+
+    def get_kea_dhcpv4_settings(self) -> dict:
+        """Read Kea DHCPv4 settings (general, ha, lexpire)."""
+        try:
+            result = self._make_request("GET", "/kea/dhcpv4/get")
+            return result.get("dhcpv4", result) if isinstance(result, dict) else {}
+        except Exception as e:
+            logger.debug(f"Kea v4 settings: {e}")
+            return {}
+
+    def get_kea_dhcpv6_settings(self) -> dict:
+        """Read Kea DHCPv6 settings (general, ha, lexpire). Core in 26.x."""
+        try:
+            result = self._make_request("GET", "/kea/dhcpv6/get")
+            return result.get("dhcpv6", result) if isinstance(result, dict) else {}
+        except Exception as e:
+            logger.debug(f"Kea v6 settings: {e}")
+            return {}
+
+    def get_kea_dhcpv6_subnets(self) -> list[dict]:
+        """Search Kea v6 subnets. Action is searchSubnet (no '6' suffix)."""
+        try:
+            result = self._make_request("POST", "/kea/dhcpv6/searchSubnet")
+            return result.get("rows", []) if isinstance(result, dict) else []
+        except Exception as e:
+            logger.debug(f"Kea v6 subnets: {e}")
+            return []
+
+    def get_kea_dhcpv4_subnets(self) -> list[dict]:
+        """Search Kea v4 subnets."""
+        try:
+            result = self._make_request("POST", "/kea/dhcpv4/searchSubnet")
+            return result.get("rows", []) if isinstance(result, dict) else []
+        except Exception as e:
+            logger.debug(f"Kea v4 subnets: {e}")
+            return []
+
+    def get_kea_dhcpv6_leases(self) -> list[dict]:
+        """Read DHCPv6 leases via /api/kea/leases6/search."""
+        try:
+            result = self._make_request("POST", "/kea/leases6/search")
+            return result.get("rows", []) if isinstance(result, dict) else []
+        except Exception as e:
+            logger.debug(f"Kea v6 leases: {e}")
+            return []
+
+    def get_radvd_entries(self) -> list[dict]:
+        """Read radvd entries via /api/radvd/settings/searchEntry."""
+        try:
+            result = self._make_request("POST", "/radvd/settings/searchEntry")
+            return result.get("rows", []) if isinstance(result, dict) else []
+        except Exception as e:
+            logger.debug(f"Radvd search: {e}")
+            return []
+
+    def get_radvd_settings(self) -> dict:
+        """Read full radvd model with entry list."""
+        try:
+            result = self._make_request("GET", "/radvd/settings/get")
+            return result.get("radvd", result) if isinstance(result, dict) else {}
+        except Exception as e:
+            logger.debug(f"Radvd settings: {e}")
+            return {}
+
+    def get_gateway_settings(self) -> list[dict]:
+        """Read full gateway list with monitor settings."""
+        try:
+            result = self._make_request("POST", "/routing/settings/searchGateway")
+            return result.get("rows", []) if isinstance(result, dict) else []
+        except Exception as e:
+            logger.debug(f"Routing gateways: {e}")
+            return []
+
+    def get_interfaces_info(self) -> list[dict]:
+        """Read overview/interfacesInfo, includes per-interface IPv4 and IPv6."""
+        try:
+            result = self._make_request("GET", "/interfaces/overview/interfacesInfo")
+            return result.get("rows", []) if isinstance(result, dict) else []
+        except Exception as e:
+            logger.debug(f"Interfaces info: {e}")
+            return []
+
+    def get_legacy_config(self, section: str) -> dict:
         """Get legacy configuration via diagnostics API"""
         try:
-            result = self._make_request("GET", f"/diagnostics/firewall/pf_states")
+            result = self._make_request("GET", "/diagnostics/firewall/pf_states")
             return result
         except Exception as e:
             logger.debug(f"Failed to get legacy config: {e}")

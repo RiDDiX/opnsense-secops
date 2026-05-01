@@ -2,19 +2,19 @@
 OPNsense Security Auditor - Web Dashboard
 Flask-based web interface for managing scans and viewing results
 """
-import os
 import json
 import logging
-from flask import Flask, render_template, request, jsonify, send_from_directory, Response
-from flask_cors import CORS
-from datetime import datetime, timedelta
-import sys
-
-from src.config_loader import ConfigLoader
-from src.opnsense_client import OPNsenseClient
-from src.main import SecurityAuditor
+import os
 import threading
 import time
+from datetime import datetime, timedelta
+
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory
+from flask_cors import CORS
+
+from src.config_loader import ConfigLoader
+from src.main import SecurityAuditor
+from src.opnsense_client import OPNsenseClient
 
 app = Flask(__name__)
 
@@ -31,8 +31,10 @@ class ScanManager:
         self.error = None
         self.cancel_requested = False
         self.logs = []  # Console log messages
+        self.rules_checked = 0
+        self.findings_count = 0
         self.lock = threading.Lock()
-    
+
     def start(self):
         with self.lock:
             self.status = 'running'
@@ -44,8 +46,10 @@ class ScanManager:
             self.error = None
             self.cancel_requested = False
             self.logs = []
+            self.rules_checked = 0
+            self.findings_count = 0
             self._add_log('info', 'Security scan started')
-    
+
     def _add_log(self, level: str, message: str):
         """Add a log message (must be called with lock held or from within locked method)"""
         timestamp = datetime.now().strftime('%H:%M:%S')
@@ -57,12 +61,12 @@ class ScanManager:
         # Keep only last 100 messages
         if len(self.logs) > 100:
             self.logs = self.logs[-100:]
-    
+
     def log(self, level: str, message: str):
         """Add a log message (thread-safe)"""
         with self.lock:
             self._add_log(level, message)
-    
+
     def update(self, step_name: str, step_number: int):
         with self.lock:
             if self.cancel_requested:
@@ -74,7 +78,7 @@ class ScanManager:
             self.progress = int((step_number / self.total_steps) * 100)
             self._add_log('info', f'Step {step_number}/{self.total_steps}: {step_name}')
             return True
-    
+
     def complete(self):
         with self.lock:
             self.status = 'completed'
@@ -82,21 +86,28 @@ class ScanManager:
             self.current_step = 'Scan completed'
             self.completed_at = datetime.now().isoformat()
             self._add_log('success', 'Security scan completed successfully')
-    
+
     def fail(self, error: str):
         with self.lock:
             self.status = 'failed'
             self.error = error
             self.completed_at = datetime.now().isoformat()
             self._add_log('error', f'Scan failed: {error}')
-    
+
     def cancel(self):
         with self.lock:
             self.cancel_requested = True
             if self.status == 'running':
                 self.status = 'cancelling'
                 self._add_log('warning', 'Cancellation requested...')
-    
+
+    def update_stats(self, rules_checked: int = None, findings_count: int = None):
+        with self.lock:
+            if rules_checked is not None:
+                self.rules_checked = rules_checked
+            if findings_count is not None:
+                self.findings_count = findings_count
+
     def get_status(self):
         with self.lock:
             return {
@@ -108,9 +119,11 @@ class ScanManager:
                 'started_at': self.started_at,
                 'completed_at': self.completed_at,
                 'error': self.error,
-                'logs': self.logs.copy()
+                'logs': self.logs.copy(),
+                'rules_checked': self.rules_checked,
+                'findings_count': self.findings_count
             }
-    
+
     def is_cancelled(self):
         with self.lock:
             return self.cancel_requested
@@ -128,7 +141,7 @@ REPORTS_DIR = "/app/reports"
 TRANSLATIONS_FILE = os.path.join(os.path.dirname(__file__), 'translations.json')
 
 # Load translations
-with open(TRANSLATIONS_FILE, 'r', encoding='utf-8') as f:
+with open(TRANSLATIONS_FILE, encoding='utf-8') as f:
     TRANSLATIONS = json.load(f)
 
 
@@ -148,7 +161,7 @@ def load_persistent_config():
     config_file = os.path.join(CONFIG_DIR, 'opnsense.json')
     if os.path.exists(config_file):
         try:
-            with open(config_file, 'r') as f:
+            with open(config_file) as f:
                 config = json.load(f)
             # Set environment variables from saved config
             if config.get('host'):
@@ -182,7 +195,7 @@ def get_config():
         config_file = os.path.join(CONFIG_DIR, 'opnsense.json')
         saved_config = {}
         if os.path.exists(config_file):
-            with open(config_file, 'r') as f:
+            with open(config_file) as f:
                 saved_config = json.load(f)
 
         opnsense_config = {
@@ -247,7 +260,7 @@ def save_config():
 def start_scan():
     """Start a new security scan"""
     global scan_manager
-    
+
     try:
         # Check if scan is already running
         current_status = scan_manager.get_status()
@@ -262,49 +275,49 @@ def start_scan():
             global scan_manager
             try:
                 scan_manager.start()
-                
+
                 # Step 1: Initialize
                 if not scan_manager.update('Validating configuration...', 1):
                     return
-                
+
                 auditor = SecurityAuditor()
                 if not auditor.validate_configuration():
                     scan_manager.fail('Configuration validation failed')
                     return
-                
+
                 # Step 2: Connect to OPNsense
                 if not scan_manager.update('Connecting to OPNsense...', 2):
                     return
-                
+
                 if not auditor.initialize_client():
                     scan_manager.fail('Failed to connect to OPNsense')
                     return
-                
+
                 # Step 3: Initialize analyzers
                 if not scan_manager.update('Initializing analyzers...', 3):
                     return
-                
+
                 auditor.initialize_analyzers()
-                
+
                 # Pass scan_manager to auditor for progress updates
                 auditor.scan_manager = scan_manager
-                
+
                 # Step 4-6: Run audit (progress updated inside)
                 results = auditor.run_audit()
-                
+
                 if scan_manager.is_cancelled():
                     scan_manager.status = 'cancelled'
                     return
-                
+
                 # Step 8: Generate reports
                 if not scan_manager.update('Generating reports...', 8):
                     return
-                
+
                 report_files = auditor.report_generator.generate_reports(results, REPORTS_DIR)
                 logger.info(f"Scan completed. Reports: {report_files}")
-                
+
                 scan_manager.complete()
-                
+
             except Exception as e:
                 logger.error(f"Scan failed: {e}", exc_info=True)
                 scan_manager.fail(str(e))
@@ -337,16 +350,16 @@ def scan_status():
 def cancel_scan():
     """Cancel the running scan"""
     global scan_manager
-    
+
     current_status = scan_manager.get_status()
     if current_status['status'] not in ['running', 'cancelling']:
         return jsonify({
             'success': False,
             'error': 'No scan is currently running'
         }), 400
-    
+
     scan_manager.cancel()
-    
+
     return jsonify({
         'success': True,
         'message': 'Scan cancellation requested',
@@ -393,14 +406,14 @@ def get_scan_history():
         history = []
         if not os.path.exists(REPORTS_DIR):
             return jsonify({'success': True, 'history': []})
-        
+
         for filename in os.listdir(REPORTS_DIR):
             if filename.startswith('security_audit_') and filename.endswith('.json'):
                 filepath = os.path.join(REPORTS_DIR, filename)
                 try:
-                    with open(filepath, 'r') as f:
+                    with open(filepath) as f:
                         report = json.load(f)
-                    
+
                     summary = report.get('summary', {})
                     entry = {
                         'filename': filename,
@@ -417,7 +430,7 @@ def get_scan_history():
                     history.append(entry)
                 except Exception as e:
                     logger.debug(f"Skipping corrupt report {filename}: {e}")
-        
+
         history.sort(key=lambda x: x['timestamp'])
         return jsonify({'success': True, 'history': history})
     except Exception as e:
@@ -434,7 +447,7 @@ def get_report(filename):
         if not os.path.exists(filepath):
             return jsonify({'success': False, 'error': 'Report not found'}), 404
 
-        with open(filepath, 'r') as f:
+        with open(filepath) as f:
             report_data = json.load(f)
 
         return jsonify({
@@ -463,14 +476,14 @@ def download_html_report(filename):
         json_path = os.path.join(REPORTS_DIR, filename)
         if not os.path.exists(json_path):
             return jsonify({'success': False, 'error': 'Report not found'}), 404
-        
-        with open(json_path, 'r') as f:
+
+        with open(json_path) as f:
             report_data = json.load(f)
-        
+
         from src.report_generator import ReportGenerator
         generator = ReportGenerator()
         html_content = generator.generate_html_report(report_data)
-        
+
         html_filename = filename.replace('.json', '.html')
         return Response(
             html_content,
@@ -493,7 +506,7 @@ def clear_scan_history():
                 if os.path.isfile(filepath) and filename.startswith('security_audit_'):
                     os.remove(filepath)
                     deleted += 1
-        
+
         logger.info(f"Cleared {deleted} report files")
         return jsonify({
             'success': True,
@@ -512,7 +525,7 @@ _schedule_timer = None
 def _load_schedule():
     """Load schedule config from file"""
     if os.path.exists(_schedule_file):
-        with open(_schedule_file, 'r') as f:
+        with open(_schedule_file) as f:
             return json.load(f)
     return {'enabled': False, 'interval_hours': 24, 'next_run': None}
 
@@ -528,48 +541,48 @@ def _run_scheduled_scan():
     schedule = _load_schedule()
     if not schedule.get('enabled', False):
         return
-    
+
     if scan_manager.status not in ('running', 'cancelling'):
         logger.info("Starting scheduled scan...")
-        
+
         def run_scan():
             global scan_manager
             try:
                 scan_manager.start()
-                
+
                 scan_manager.update('Validating configuration...', 1)
                 auditor = SecurityAuditor()
                 if not auditor.validate_configuration():
                     scan_manager.fail('Configuration validation failed')
                     return
-                
+
                 scan_manager.update('Connecting to OPNsense...', 2)
                 if not auditor.initialize_client():
                     scan_manager.fail('Failed to connect to OPNsense')
                     return
-                
+
                 scan_manager.update('Initializing analyzers...', 3)
                 auditor.initialize_analyzers()
                 auditor.scan_manager = scan_manager
-                
+
                 results = auditor.run_audit()
-                
+
                 if scan_manager.is_cancelled():
                     scan_manager.status = 'cancelled'
                     return
-                
+
                 scan_manager.update('Generating reports...', 8)
                 auditor.report_generator.generate_reports(results, REPORTS_DIR)
                 scan_manager.complete()
-                
+
             except Exception as e:
                 logger.error(f"Scheduled scan failed: {e}", exc_info=True)
                 scan_manager.fail(str(e))
-        
+
         thread = threading.Thread(target=run_scan)
         thread.daemon = True
         thread.start()
-    
+
     # Schedule next run
     _schedule_next_run()
 
@@ -582,12 +595,12 @@ def _schedule_next_run():
             _schedule_timer.cancel()
             _schedule_timer = None
         return
-    
+
     interval = max(1, schedule.get('interval_hours', 24)) * 3600
     next_run = (datetime.now() + timedelta(seconds=interval)).isoformat()
     schedule['next_run'] = next_run
     _save_schedule(schedule)
-    
+
     if _schedule_timer:
         _schedule_timer.cancel()
     _schedule_timer = threading.Timer(interval, _run_scheduled_scan)
@@ -611,15 +624,15 @@ def set_schedule():
         schedule = _load_schedule()
         schedule['enabled'] = data.get('enabled', False)
         schedule['interval_hours'] = max(1, int(data.get('interval_hours', 24)))
-        
+
         if schedule['enabled']:
             interval = schedule['interval_hours'] * 3600
             schedule['next_run'] = (datetime.now() + timedelta(seconds=interval)).isoformat()
         else:
             schedule['next_run'] = None
-        
+
         _save_schedule(schedule)
-        
+
         if schedule['enabled']:
             _schedule_next_run()
         else:
@@ -627,7 +640,7 @@ def set_schedule():
             if _schedule_timer:
                 _schedule_timer.cancel()
                 _schedule_timer = None
-        
+
         return jsonify({
             'success': True,
             'message': f"Schedule {'aktiviert' if schedule['enabled'] else 'deaktiviert'}",
@@ -644,7 +657,7 @@ def add_finding_to_ignore_list():
     try:
         data = request.json
         finding = data.get('finding', {})
-        
+
         # Auto-detect category from finding structure
         if finding.get('rule_id') or finding.get('rule_description'):
             category = 'firewall_exceptions'
@@ -690,19 +703,19 @@ def add_finding_to_ignore_list():
                 'description': finding.get('issue', ''),
                 'reason': data.get('reason', 'Manuell ausgeschlossen')
             }
-        
+
         config_loader = ConfigLoader(CONFIG_DIR)
         _, exceptions = config_loader.load_all()
-        
+
         if category not in exceptions:
             exceptions[category] = []
         exceptions[category].append(item)
-        
+
         import yaml
         exceptions_file = os.path.join(CONFIG_DIR, 'exceptions.yaml')
         with open(exceptions_file, 'w') as f:
             yaml.dump(exceptions, f, default_flow_style=False, allow_unicode=True)
-        
+
         return jsonify({
             'success': True,
             'message': 'Finding zur Ausnahmeliste hinzugefügt',
@@ -852,20 +865,20 @@ def get_optimal_config():
     try:
         from src.analyzers.optimal_config_generator import OptimalConfigGenerator
         generator = OptimalConfigGenerator()
-        
+
         # Get latest report if available
         latest_report = None
         reports_list = []
         for filename in os.listdir(REPORTS_DIR):
             if filename.startswith('security_audit_') and filename.endswith('.json'):
                 reports_list.append(filename)
-        
+
         if reports_list:
             reports_list.sort(reverse=True)
             filepath = os.path.join(REPORTS_DIR, reports_list[0])
-            with open(filepath, 'r') as f:
+            with open(filepath) as f:
                 latest_report = json.load(f)
-        
+
         if latest_report:
             recommendations = generator.generate_recommendations(latest_report)
         else:
@@ -877,7 +890,7 @@ def get_optimal_config():
                 "implementation_guide": generator._get_implementation_guide(),
                 "message": "Run a scan to get personalized recommendations"
             }
-        
+
         return jsonify({
             'success': True,
             'recommendations': recommendations
@@ -896,7 +909,7 @@ def get_security_score():
         for filename in os.listdir(REPORTS_DIR):
             if filename.startswith('security_audit_') and filename.endswith('.json'):
                 reports_list.append(filename)
-        
+
         if not reports_list:
             return jsonify({
                 'success': True,
@@ -904,13 +917,13 @@ def get_security_score():
                 'grade': 'N/A',
                 'message': 'No scans completed yet'
             })
-        
+
         reports_list.sort(reverse=True)
         filepath = os.path.join(REPORTS_DIR, reports_list[0])
-        
-        with open(filepath, 'r') as f:
+
+        with open(filepath) as f:
             report = json.load(f)
-        
+
         return jsonify({
             'success': True,
             'score': report.get('security_score', 0),
@@ -931,24 +944,24 @@ def get_available_networks():
         host = os.getenv('OPNSENSE_HOST')
         api_key = os.getenv('OPNSENSE_API_KEY')
         api_secret = os.getenv('OPNSENSE_API_SECRET')
-        
+
         if not all([host, api_key, api_secret]):
             return jsonify({
                 'success': False,
                 'error': 'OPNsense credentials not configured'
             }), 400
-        
+
         client = OPNsenseClient(host, api_key, api_secret)
-        
+
         # Get interfaces
         interfaces = client.get_interfaces()
-        
+
         # Get VLANs
         vlans = client.get_vlans()
-        
+
         # Build network list
         networks = []
-        
+
         # Parse interfaces for networks
         if isinstance(interfaces, dict):
             for iface_name, iface_data in interfaces.items():
@@ -972,9 +985,9 @@ def get_available_networks():
                                             'type': 'interface',
                                             'enabled': iface_data.get('enable', '1') == '1'
                                         })
-                                    except:
+                                    except Exception:
                                         pass
-        
+
         # Add VLANs
         for vlan in vlans:
             vlan_id = vlan.get('vlanif', vlan.get('tag', ''))
@@ -985,7 +998,7 @@ def get_available_networks():
                 'type': 'vlan',
                 'enabled': True
             })
-        
+
         return jsonify({
             'success': True,
             'networks': networks,
@@ -1003,12 +1016,12 @@ def save_network_selection():
     try:
         data = request.json
         selected_networks = data.get('networks', [])
-        
+
         # Save to config file
         config_file = os.path.join(CONFIG_DIR, 'scan_networks.json')
         with open(config_file, 'w') as f:
             json.dump({'selected_networks': selected_networks}, f, indent=2)
-        
+
         return jsonify({'success': True, 'message': 'Network selection saved'})
     except Exception as e:
         logger.error(f"Failed to save network selection: {e}")
@@ -1021,7 +1034,7 @@ def get_network_selection():
     try:
         config_file = os.path.join(CONFIG_DIR, 'scan_networks.json')
         if os.path.exists(config_file):
-            with open(config_file, 'r') as f:
+            with open(config_file) as f:
                 config = json.load(f)
             return jsonify({'success': True, 'networks': config.get('selected_networks', [])})
         return jsonify({'success': True, 'networks': []})
@@ -1035,40 +1048,40 @@ def fetch_networks_from_opnsense():
     """Fetch and auto-classify networks from OPNsense"""
     try:
         import ipaddress
-        
+
         host = os.getenv('OPNSENSE_HOST')
         api_key = os.getenv('OPNSENSE_API_KEY')
         api_secret = os.getenv('OPNSENSE_API_SECRET')
-        
+
         if not all([host, api_key, api_secret]):
             return jsonify({
                 'success': False,
                 'error': 'OPNsense credentials not configured. Please save API settings first.'
             }), 400
-        
+
         client = OPNsenseClient(host, api_key, api_secret)
-        
+
         # Get interfaces and VLANs
         interfaces = client.get_interfaces()
         vlans = client.get_vlans()
-        
+
         logger.info(f"Fetched interfaces: {list(interfaces.keys()) if isinstance(interfaces, dict) else 'none'}")
         logger.info(f"Fetched VLANs: {len(vlans) if vlans else 0}")
-        
+
         # Debug: Log raw interface data structure
         for iface_name, iface_data in interfaces.items():
             logger.debug(f"Interface {iface_name}: {type(iface_data)} - keys: {list(iface_data.keys()) if isinstance(iface_data, dict) else 'N/A'}")
-        
+
         networks = []
         vlan_interfaces = set()  # Track VLAN interface names to avoid duplicates
-        
+
         # First, collect VLAN interface names
         for vlan in vlans:
             vlan_tag = vlan.get('tag', vlan.get('vlanif', ''))
             parent_if = vlan.get('if', '')
             if vlan_tag and parent_if:
                 vlan_interfaces.add(f"{parent_if}.{vlan_tag}")
-        
+
         # Parse ALL interfaces
         if isinstance(interfaces, dict):
             for iface_name, iface_data in interfaces.items():
@@ -1077,17 +1090,17 @@ def fetch_networks_from_opnsense():
                     iface_data = {'descr': iface_data, 'if': iface_name}
                 elif not isinstance(iface_data, dict):
                     continue
-                
+
                 # Skip loopback and system interfaces
                 if iface_name in ['lo0', 'pflog0', 'pfsync0', 'enc0']:
                     continue
-                
+
                 # Skip VLAN sub-interfaces (will be added from vlans list)
                 if '.' in iface_name and iface_name in vlan_interfaces:
                     continue
-                
+
                 descr = iface_data.get('descr', iface_data.get('description', iface_name))
-                
+
                 # Determine type - only set if clearly identifiable
                 detected_type = None
                 name_lower = (descr or iface_name).lower()
@@ -1099,11 +1112,11 @@ def fetch_networks_from_opnsense():
                     # OPTx interfaces - user should classify
                     detected_type = None
                 # Otherwise leave as None - user must choose
-                
+
                 # Get IPv4 address - handle multiple formats
                 network_str = None
                 gateway = iface_data.get('gateway', '')
-                
+
                 # Format 1: ipv4 as list of dicts
                 ipv4 = iface_data.get('ipv4', [])
                 if ipv4 and isinstance(ipv4, list):
@@ -1118,9 +1131,9 @@ def fetch_networks_from_opnsense():
                                     # Public IP = likely WAN
                                     if not net.is_private and detected_type is None:
                                         detected_type = 'wan'
-                                except:
+                                except Exception:
                                     pass
-                
+
                 # Format 2: Direct ipaddr field
                 if not network_str:
                     addr = iface_data.get('ipaddr', '')
@@ -1131,9 +1144,9 @@ def fetch_networks_from_opnsense():
                             network_str = str(net)
                             if not net.is_private and detected_type is None:
                                 detected_type = 'wan'
-                        except:
+                        except Exception:
                             pass
-                
+
                 # Format 3: Check for 'addr' in status
                 if not network_str and 'status' in iface_data:
                     status = iface_data.get('status', {})
@@ -1144,9 +1157,9 @@ def fetch_networks_from_opnsense():
                             try:
                                 net = ipaddress.ip_network(f"{addr}/{subnet}", strict=False)
                                 network_str = str(net)
-                            except:
+                            except Exception:
                                 pass
-                
+
                 # Include ALL interfaces (regardless of enabled status)
                 networks.append({
                     'name': descr or iface_name,
@@ -1157,13 +1170,13 @@ def fetch_networks_from_opnsense():
                     'vlan_tag': None,
                     'enabled': iface_data.get('enable', iface_data.get('enabled', '1')) in ['1', 1, True, 'true']
                 })
-        
+
         # Add VLANs
         for vlan in vlans:
             vlan_tag = vlan.get('tag', vlan.get('vlanif', ''))
             descr = vlan.get('descr', '')
             parent_if = vlan.get('if', '')
-            
+
             networks.append({
                 'name': f"VLAN {vlan_tag}" + (f" ({descr})" if descr else ''),
                 'interface': f"{parent_if}.{vlan_tag}",
@@ -1173,7 +1186,7 @@ def fetch_networks_from_opnsense():
                 'vlan_tag': vlan_tag,
                 'enabled': True
             })
-        
+
         return jsonify({
             'success': True,
             'networks': networks
@@ -1243,7 +1256,7 @@ def cancel_internal_scan():
 def start_internal_scan():
     """Start internal network device scan"""
     global internal_scan_state
-    
+
     # Check for stuck scan and auto-reset
     if internal_scan_state['status'] == 'running':
         if is_internal_scan_stuck():
@@ -1251,13 +1264,14 @@ def start_internal_scan():
             internal_scan_state['status'] = 'idle'
         else:
             return jsonify({'success': False, 'error': 'Scan already in progress. Use /api/scan/internal/cancel to force reset.'}), 400
-    
+
     def run_internal_scan():
         global internal_scan_state
         try:
             import ipaddress
+
             import nmap
-            
+
             with internal_scan_lock:
                 internal_scan_state['status'] = 'running'
                 internal_scan_state['current_step'] = 'Initializing...'
@@ -1268,31 +1282,31 @@ def start_internal_scan():
                 internal_scan_state['started_at'] = time.time()
                 internal_scan_state['total_hosts'] = 0
                 internal_scan_state['scanned_hosts'] = 0
-            
+
             internal_scan_log('info', '🚀 Starting internal network device scan...')
-            
+
             # Load network config
             config_file = os.path.join(CONFIG_DIR, 'scan_networks.json')
             networks_to_scan = []
-            
+
             if os.path.exists(config_file):
-                with open(config_file, 'r') as f:
+                with open(config_file) as f:
                     config = json.load(f)
                 # Only scan LAN and VLAN networks (not WAN)
                 for net in config.get('selected_networks', []):
                     if net.get('type') in ['lan', 'vlan'] and net.get('network'):
                         networks_to_scan.append(net['network'])
                         internal_scan_log('info', f'📋 Added network: {net["network"]} ({net.get("type", "unknown").upper()})')
-            
+
             if not networks_to_scan:
                 # Fallback to SCAN_NETWORK env var
                 scan_net = os.getenv('SCAN_NETWORK', '192.168.1.0/24')
                 networks_to_scan = [scan_net]
                 internal_scan_log('warning', f'⚠️ No networks configured, using fallback: {scan_net}')
-            
+
             internal_scan_state['current_step'] = f'Discovering hosts in {len(networks_to_scan)} networks...'
             internal_scan_log('info', f'🔍 Will scan {len(networks_to_scan)} network(s)')
-            
+
             # Get DHCP/ARP data if possible
             dhcp_leases = []
             arp_table = []
@@ -1308,15 +1322,15 @@ def start_internal_scan():
                     internal_scan_log('success', f'✅ Got {len(dhcp_leases)} DHCP leases, {len(arp_table)} ARP entries')
             except Exception as e:
                 internal_scan_log('warning', f'⚠️ Could not fetch DHCP/ARP data: {str(e)[:50]}')
-            
+
             # Helper to check if IP is private
             def is_private_ip(ip_str):
                 try:
                     ip = ipaddress.ip_address(ip_str)
                     return ip.is_private and not ip.is_loopback
-                except:
+                except Exception:
                     return False
-            
+
             # Helper: extract MAC from various field name formats
             def extract_mac(entry):
                 for key in ('mac', 'hwaddr', 'hw_address', 'hw-address', 'hwaddress',
@@ -1325,7 +1339,7 @@ def start_internal_scan():
                     if val and val not in ('', '--', '(incomplete)', 'incomplete'):
                         return val
                 return ''
-            
+
             # Helper: extract hostname from various field name formats
             def extract_hostname(entry):
                 for key in ('hostname', 'name', 'client-hostname', 'client_hostname',
@@ -1334,7 +1348,7 @@ def start_internal_scan():
                     if val and val not in ('', '--', 'Unknown', '?', '*'):
                         return val
                 return ''
-            
+
             # Helper: extract IP from various field name formats
             def extract_ip(entry):
                 for key in ('address', 'ip', 'ip-address', 'ip_address', 'ipaddr', 'IP'):
@@ -1342,15 +1356,24 @@ def start_internal_scan():
                     if val:
                         return val
                 return ''
-            
-            # Debug: Log first entry of each data source to see field format
+
+            # Debug: Log sample entries to see actual data format
             if dhcp_leases:
                 sample = dhcp_leases[0]
-                internal_scan_log('info', f'📋 DHCP fields: {list(sample.keys())[:10]}')
+                internal_scan_log('info', f'📋 DHCP fields: {list(sample.keys())[:12]}')
+                # Show first entry values (truncated) for debugging
+                sample_vals = {k: str(v)[:30] for k, v in list(sample.items())[:8]}
+                internal_scan_log('info', f'📋 DHCP sample: {sample_vals}')
+            else:
+                internal_scan_log('warning', '⚠️ No DHCP leases returned from OPNsense')
             if arp_table:
                 sample = arp_table[0]
-                internal_scan_log('info', f'📋 ARP fields: {list(sample.keys())[:10]}')
-            
+                internal_scan_log('info', f'📋 ARP fields: {list(sample.keys())[:12]}')
+                sample_vals = {k: str(v)[:30] for k, v in list(sample.items())[:8]}
+                internal_scan_log('info', f'📋 ARP sample: {sample_vals}')
+            else:
+                internal_scan_log('warning', '⚠️ No ARP entries returned from OPNsense')
+
             # Collect all known hosts from DHCP and ARP
             known_hosts = {}
             for lease in dhcp_leases:
@@ -1363,10 +1386,10 @@ def start_internal_scan():
                         'hostname': hostname,
                         'status': 'active' if lease.get('state', lease.get('binding_state', '')) in ('active', 'Active') else 'inactive'
                     }
-            
+
             dhcp_matched = sum(1 for v in known_hosts.values() if v.get('hostname'))
             internal_scan_log('info', f'📋 DHCP: {len(known_hosts)} IPs, {dhcp_matched} with hostname')
-            
+
             for arp in arp_table:
                 ip = arp.get('ip', arp.get('ip-address', arp.get('address', '')))
                 if ip and is_private_ip(ip):
@@ -1382,37 +1405,37 @@ def start_internal_scan():
                     if arp_hostname and not known_hosts[ip].get('hostname'):
                         known_hosts[ip]['hostname'] = arp_hostname
                     known_hosts[ip]['status'] = 'active'
-            
+
             arp_macs = sum(1 for v in known_hosts.values() if v.get('mac'))
             internal_scan_log('info', f'📋 After ARP merge: {len(known_hosts)} IPs, {arp_macs} with MAC')
-            
+
             # Use nmap to discover live hosts and scan ALL ports
             nm = nmap.PortScanner()
             devices = []
             all_live_hosts = []
-            
+
             # Phase 1: Host Discovery
             internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
             internal_scan_log('info', '📡 PHASE 1: Host Discovery')
             internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-            
+
             for net_idx, network in enumerate(networks_to_scan):
                 internal_scan_state['current_step'] = f'Host discovery: {network}'
                 internal_scan_log('info', f'🔎 Scanning network {net_idx+1}/{len(networks_to_scan)}: {network}')
-                
+
                 # First find live hosts with ping scan
                 try:
                     nm.scan(hosts=network, arguments='-sn')
                     live_hosts = [h for h in nm.all_hosts() if is_private_ip(h)]
                     internal_scan_log('success', f'   ✅ Found {len(live_hosts)} live hosts in {network}')
-                    
+
                     # Add discovered hosts to live list
                     for host_ip in live_hosts:
                         host_info = known_hosts.get(host_ip, {})
                         hostname = host_info.get('hostname', '')
                         display_name = f"{host_ip} ({hostname})" if hostname else host_ip
                         internal_scan_log('info', f'   📍 Discovered: {display_name}')
-                        
+
                         with internal_scan_lock:
                             internal_scan_state['discovered_hosts'].append({
                                 'ip': host_ip,
@@ -1421,34 +1444,34 @@ def start_internal_scan():
                                 'status': 'pending'
                             })
                         all_live_hosts.append((host_ip, network))
-                        
+
                 except Exception as e:
                     internal_scan_log('error', f'   ❌ Host discovery failed: {str(e)[:50]}')
                     logger.error(f"Host discovery failed for {network}: {e}")
                     continue
-            
+
             total_hosts = len(all_live_hosts)
             with internal_scan_lock:
                 internal_scan_state['total_hosts'] = total_hosts
-            
+
             internal_scan_log('info', f'📊 Total hosts to scan: {total_hosts}')
-            
+
             # Phase 2: Port Scanning
             internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
             internal_scan_log('info', '🔓 PHASE 2: Port Scanning (1-65535)')
             internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-            
+
             for i, (host_ip, network) in enumerate(all_live_hosts):
                 with internal_scan_lock:
                     internal_scan_state['scanned_hosts'] = i
                 internal_scan_state['current_step'] = f'Scanning ports on {host_ip} ({i+1}/{total_hosts})'
-                
+
                 host_info = known_hosts.get(host_ip, {})
                 hostname = host_info.get('hostname', '')
                 display_name = f"{host_ip} ({hostname})" if hostname else host_ip
-                
+
                 internal_scan_log('info', f'🖥️  [{i+1}/{total_hosts}] Scanning: {display_name}')
-                
+
                 device = {
                     'ip': host_ip,
                     'mac': host_info.get('mac', ''),
@@ -1459,13 +1482,13 @@ def start_internal_scan():
                     'open_ports': [],
                     'services': {}
                 }
-                
+
                 try:
                     # Full port scan (1-65535) with service detection
                     scan_start = time.time()
                     nm.scan(hosts=host_ip, arguments='-sS -p 1-65535 --min-rate=1000 -T4')
                     scan_duration = time.time() - scan_start
-                    
+
                     if host_ip in nm.all_hosts():
                         # Get hostname from scan if not known
                         if not device['hostname'] and 'hostnames' in nm[host_ip]:
@@ -1473,7 +1496,7 @@ def start_internal_scan():
                                 if h.get('name'):
                                     device['hostname'] = h['name']
                                     break
-                        
+
                         # Reverse DNS fallback
                         if not device['hostname']:
                             try:
@@ -1483,11 +1506,11 @@ def start_internal_scan():
                                     device['hostname'] = resolved
                             except (socket.herror, socket.gaierror, OSError):
                                 pass
-                        
+
                         # Get MAC from scan if not known
                         if not device['mac'] and 'addresses' in nm[host_ip]:
                             device['mac'] = nm[host_ip]['addresses'].get('mac', '')
-                        
+
                         # Get open ports
                         if 'tcp' in nm[host_ip]:
                             for port, port_info in nm[host_ip]['tcp'].items():
@@ -1495,7 +1518,7 @@ def start_internal_scan():
                                     device['open_ports'].append(port)
                                     service_name = port_info.get('name', 'unknown')
                                     device['services'][port] = service_name
-                        
+
                         port_count = len(device['open_ports'])
                         if port_count > 0:
                             port_list = ', '.join(str(p) for p in sorted(device['open_ports'])[:10])
@@ -1504,13 +1527,13 @@ def start_internal_scan():
                             internal_scan_log('success', f'   ✅ {port_count} open ports: {port_list} ({scan_duration:.1f}s)')
                         else:
                             internal_scan_log('info', f'   ℹ️  No open ports found ({scan_duration:.1f}s)')
-                            
+
                 except Exception as e:
                     internal_scan_log('error', f'   ❌ Scan failed: {str(e)[:50]}')
                     logger.error(f"Port scan failed for {host_ip}: {e}")
-                
+
                 devices.append(device)
-                
+
                 # Update devices list in real-time
                 with internal_scan_lock:
                     internal_scan_state['devices'] = devices.copy()
@@ -1521,7 +1544,7 @@ def start_internal_scan():
                             dh['status'] = 'completed'
                             dh['open_ports'] = len(device['open_ports'])
                             break
-            
+
             # Phase 3: Batch Reverse DNS for remaining unknowns
             import socket
             unknown_hosts = [d for d in devices if not d.get('hostname')]
@@ -1530,7 +1553,7 @@ def start_internal_scan():
                 internal_scan_log('info', f'🔤 PHASE 3: Hostname Resolution ({len(unknown_hosts)} devices)')
                 internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
                 internal_scan_state['current_step'] = f'Resolving hostnames for {len(unknown_hosts)} devices...'
-                
+
                 resolved_count = 0
                 old_timeout = socket.getdefaulttimeout()
                 socket.setdefaulttimeout(1.5)
@@ -1542,17 +1565,17 @@ def start_internal_scan():
                                 d['hostname'] = hostname
                                 resolved_count += 1
                                 internal_scan_log('success', f'   ✅ {d["ip"]} → {hostname}')
-                        except (socket.herror, socket.gaierror, socket.timeout, OSError):
+                        except (TimeoutError, socket.herror, socket.gaierror, OSError):
                             pass
                 finally:
                     socket.setdefaulttimeout(old_timeout)
-                
+
                 internal_scan_log('info', f'📋 Resolved {resolved_count}/{len(unknown_hosts)} hostnames via reverse DNS')
-                
+
                 # Update devices in state
                 with internal_scan_lock:
                     internal_scan_state['devices'] = devices.copy()
-            
+
             # Scan complete
             internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
             internal_scan_log('success', f'🎉 Scan completed! Found {len(devices)} devices')
@@ -1563,20 +1586,20 @@ def start_internal_scan():
             internal_scan_log('info', f'📊 Hostnames resolved: {hostnames_known}/{len(devices)}')
             internal_scan_log('info', f'📊 MAC addresses known: {macs_known}/{len(devices)}')
             internal_scan_log('info', '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-            
+
             internal_scan_state['current_step'] = 'Scan completed'
             internal_scan_state['devices'] = devices
             internal_scan_state['status'] = 'completed'
-            
+
         except Exception as e:
             logger.error(f"Internal scan failed: {e}")
             internal_scan_state['status'] = 'failed'
             internal_scan_state['error'] = str(e)
-    
+
     thread = threading.Thread(target=run_internal_scan)
     thread.daemon = True
     thread.start()
-    
+
     return jsonify({'success': True, 'message': 'Internal scan started'})
 
 
@@ -1598,12 +1621,12 @@ def test_connection():
         host = data.get('host', '')
         api_key = data.get('api_key', '')
         api_secret = data.get('api_secret', '')
-        
+
         if not all([host, api_key, api_secret]):
             return jsonify({'success': False, 'error': 'Alle Felder müssen ausgefüllt sein'})
-        
+
         client = OPNsenseClient(host, api_key, api_secret, verify_ssl=False)
-        
+
         if client.test_connection():
             # Get version info
             sys_info = client.get_system_info()
@@ -1626,24 +1649,24 @@ def get_latest_results():
         # Find latest report
         if not os.path.exists(REPORTS_DIR):
             return jsonify({'success': False, 'error': 'Keine Reports vorhanden'})
-        
+
         json_files = [f for f in os.listdir(REPORTS_DIR) if f.endswith('.json')]
         if not json_files:
             return jsonify({'success': False, 'error': 'Keine Reports vorhanden'})
-        
+
         json_files.sort(reverse=True)
         latest = json_files[0]
-        
-        with open(os.path.join(REPORTS_DIR, latest), 'r') as f:
+
+        with open(os.path.join(REPORTS_DIR, latest)) as f:
             results = json.load(f)
-        
+
         # Calculate category scores
         results['category_scores'] = calculate_category_scores(results)
-        
+
         # Add statistics if missing
         if 'statistics' not in results:
             results['statistics'] = {}
-        
+
         return jsonify({
             'success': True,
             'results': results,
@@ -1656,13 +1679,13 @@ def get_latest_results():
 
 def calculate_category_scores(results):
     """Calculate security scores per category using weighted penalty system.
-    
+
     Uses diminishing deductions so that many low-severity findings
     don't immediately drop a category to 0%. Each finding's impact
     decreases as more findings accumulate in the same category.
     """
     severity_weights = {'critical': 20, 'high': 12, 'medium': 5, 'low': 2}
-    
+
     def calc_score(findings):
         if not findings:
             return 100
@@ -1674,27 +1697,104 @@ def calculate_category_scores(results):
             diminish = 1.0 / (1 + i * 0.3)
             total_penalty += weight * diminish
         return max(0, round(100 - total_penalty))
-    
+
     # Split findings into categories
     # Port findings (WAN-exposed) count towards firewall score
     fw_findings = results.get('firewall_findings', []) + results.get('port_findings', [])
     dns_findings = results.get('dns_findings', [])
+    ipv6_findings = results.get('ipv6_findings', [])
+    gateway_findings = results.get('gateway_findings', [])
+    radvd_findings = results.get('radvd_findings', [])
     sys_findings = []
     vpn_findings = []
-    
+
     for f in results.get('system_findings', []):
         cat = (f.get('category', '') or '').lower()
         if 'vpn' in cat:
             vpn_findings.append(f)
         else:
             sys_findings.append(f)
-    
+
     return {
         'firewall': calc_score(fw_findings),
         'dns': calc_score(dns_findings),
         'system': calc_score(sys_findings),
-        'vpn': calc_score(vpn_findings)
+        'vpn': calc_score(vpn_findings),
+        'ipv6': calc_score(ipv6_findings),
+        'gateway': calc_score(gateway_findings),
+        'radvd': calc_score(radvd_findings),
     }
+
+
+def _build_opn_client():
+    """Construct an OPNsense client from current env."""
+    host = os.getenv("OPNSENSE_HOST")
+    key = os.getenv("OPNSENSE_API_KEY")
+    secret = os.getenv("OPNSENSE_API_SECRET")
+    if not (host and key and secret):
+        return None
+    return OPNsenseClient(host=host, api_key=key, api_secret=secret, verify_ssl=False)
+
+
+def _find_finding_in_results(finding_id: str):
+    """Locate a finding by rule_id across all finding lists in latest report."""
+    if not os.path.exists(REPORTS_DIR):
+        return None
+    json_files = sorted([f for f in os.listdir(REPORTS_DIR) if f.endswith('.json')], reverse=True)
+    if not json_files:
+        return None
+    with open(os.path.join(REPORTS_DIR, json_files[0])) as fh:
+        results = json.load(fh)
+    for key in ('ipv6_findings', 'firewall_findings', 'gateway_findings', 'radvd_findings'):
+        for f in results.get(key, []) or []:
+            if f.get('rule_id') == finding_id:
+                return f
+    return None
+
+
+@app.route('/api/suggestions/preview', methods=['GET'])
+def preview_suggestion():
+    """Return the rule payload that would be sent to OPNsense for a finding."""
+    finding_id = request.args.get('finding_id', '')
+    if not finding_id:
+        return jsonify({'success': False, 'error': 'finding_id missing'}), 400
+    finding = _find_finding_in_results(finding_id)
+    if not finding:
+        return jsonify({'success': False, 'error': 'finding not found'}), 404
+    suggestion = finding.get('suggested_rule')
+    if not suggestion:
+        return jsonify({'success': False, 'error': 'no suggestion for this finding'}), 404
+    return jsonify({'success': True, 'finding_id': finding_id, 'payload': suggestion})
+
+
+@app.route('/api/suggestions/apply', methods=['POST'])
+def apply_suggestion():
+    """Create the suggested rule via /api/firewall/filter/addRule and apply pf."""
+    data = request.get_json(silent=True) or {}
+    finding_id = data.get('finding_id', '')
+    confirm = bool(data.get('confirm'))
+    if not finding_id:
+        return jsonify({'success': False, 'error': 'finding_id missing'}), 400
+    if not confirm:
+        return jsonify({'success': False, 'error': 'confirm flag required'}), 400
+    finding = _find_finding_in_results(finding_id)
+    if not finding or not finding.get('suggested_rule'):
+        return jsonify({'success': False, 'error': 'no suggestion'}), 404
+    client = _build_opn_client()
+    if not client:
+        return jsonify({'success': False, 'error': 'OPNsense env not configured'}), 500
+    try:
+        add_resp = client.add_firewall_rule(finding['suggested_rule'])
+        apply_resp = client.apply_firewall_changes()
+        return jsonify({
+            'success': True,
+            'finding_id': finding_id,
+            'add_result': add_resp,
+            'apply_result': apply_resp,
+        })
+    except Exception as exc:
+        logger.error(f"apply_suggestion failed: {exc}")
+        return jsonify({'success': False, 'error': str(exc)}), 500
 
 
 @app.route('/api/data/raw', methods=['GET'])
@@ -1704,12 +1804,12 @@ def get_raw_data():
         host = os.getenv('OPNSENSE_HOST', '')
         api_key = os.getenv('OPNSENSE_API_KEY', '')
         api_secret = os.getenv('OPNSENSE_API_SECRET', '')
-        
+
         if not all([host, api_key, api_secret]):
             return jsonify({'success': False, 'error': 'OPNsense nicht konfiguriert'})
-        
+
         client = OPNsenseClient(host, api_key, api_secret, verify_ssl=False)
-        
+
         raw_data = {
             'firewall_rules': client.get_firewall_rules(),
             'nat_rules': client.get_nat_rules(),
@@ -1718,7 +1818,7 @@ def get_raw_data():
             'system_config': client.get_system_config(),
             'vlans': client.get_vlans()
         }
-        
+
         return jsonify({
             'success': True,
             'data': raw_data,

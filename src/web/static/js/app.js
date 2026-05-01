@@ -291,10 +291,10 @@
                 state.scanning = false;
                 addScanLog('success', 'Scan abgeschlossen!');
                 showNotification('Scan abgeschlossen', 'Security-Scan wurde erfolgreich beendet.', 'success');
+                loadLatestResults();
                 setTimeout(() => {
                     hideScanPanel();
-                    loadLatestResults();
-                }, 1500);
+                }, 3000);
             } else if (data.status === 'failed' || data.status === 'cancelled') {
                 stopScanPolling();
                 state.scanning = false;
@@ -329,6 +329,14 @@
         
         const currentCheck = document.getElementById('scan-current-check');
         currentCheck.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>${data.current_step || 'Verarbeite...'}</span>`;
+
+        // Update stats
+        if (data.rules_checked !== undefined) {
+            document.getElementById('stat-rules-checked').textContent = data.rules_checked;
+        }
+        if (data.findings_count !== undefined) {
+            document.getElementById('stat-findings').textContent = data.findings_count;
+        }
 
         // Update duration
         if (state.scanStartTime) {
@@ -471,7 +479,10 @@
             ...(results.dns_findings || []),
             ...(results.system_findings || []),
             ...(results.vulnerability_findings || []),
-            ...(results.vlan_findings || [])
+            ...(results.vlan_findings || []),
+            ...(results.ipv6_findings || []),
+            ...(results.gateway_findings || []),
+            ...(results.radvd_findings || [])
         ];
     }
 
@@ -624,9 +635,50 @@
                     <pre>${escapeHtml(JSON.stringify(finding.details || finding.rule_details, null, 2))}</pre>
                 </div>
             ` : ''}
+
+            ${finding.suggested_rule ? `
+                <div class="detail-section">
+                    <h4>Vorgeschlagene Regel</h4>
+                    <pre id="suggestion-payload">${escapeHtml(JSON.stringify(finding.suggested_rule, null, 2))}</pre>
+                    <div style="margin-top:10px; display:flex; gap:8px; align-items:center">
+                        <button id="apply-suggestion-btn" class="btn-action" data-finding-id="${escapeHtml(finding.rule_id || '')}">
+                            <i class="fas fa-bolt"></i> Regel direkt anwenden
+                        </button>
+                        <span id="apply-suggestion-status" style="font-size:0.9em; color:#888"></span>
+                    </div>
+                </div>
+            ` : ''}
         `;
 
         modal.classList.remove('hidden');
+
+        const btn = document.getElementById('apply-suggestion-btn');
+        if (btn) btn.addEventListener('click', () => applySuggestion(btn.dataset.findingId));
+    }
+
+    async function applySuggestion(findingId) {
+        const status = document.getElementById('apply-suggestion-status');
+        if (!findingId) {
+            if (status) status.textContent = 'kein finding_id';
+            return;
+        }
+        if (!confirm('Regel jetzt auf der OPNsense erstellen und Apply ausloesen?')) return;
+        if (status) status.textContent = 'sende...';
+        try {
+            const res = await fetch('/api/suggestions/apply', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({finding_id: findingId, confirm: true})
+            });
+            const data = await res.json();
+            if (data.success) {
+                if (status) status.textContent = 'angewendet, uuid=' + (data.add_result && data.add_result.uuid);
+            } else {
+                if (status) status.textContent = 'Fehler: ' + (data.error || 'unbekannt');
+            }
+        } catch (e) {
+            if (status) status.textContent = 'Fehler: ' + e.message;
+        }
     }
 
     function closeModal() {

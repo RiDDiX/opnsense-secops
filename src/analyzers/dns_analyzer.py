@@ -3,13 +3,11 @@ DNS Configuration Analyzer
 Analyzes DNS/Unbound configuration for security issues
 """
 import logging
-import socket
-import subprocess
-import dns.resolver
-import dns.query
-import dns.message
-from typing import Dict, List, Tuple
 from dataclasses import dataclass
+
+import dns.message
+import dns.query
+import dns.resolver
 
 logger = logging.getLogger(__name__)
 
@@ -21,19 +19,19 @@ class DNSFinding:
     issue: str
     reason: str
     solution: str
-    details: Dict
+    details: dict
     opnsense_path: str = ""
 
 
 class DNSAnalyzer:
     """Analyzes DNS configuration for security issues"""
 
-    def __init__(self, rules_config: Dict, exceptions: List[Dict]):
+    def __init__(self, rules_config: dict, exceptions: list[dict]):
         self.rules_config = rules_config
         self.exceptions = exceptions
         self.dns_security = rules_config.get("dns_security", {})
 
-    def analyze(self, dns_config: Dict, dns_server: str) -> List[DNSFinding]:
+    def analyze(self, dns_config: dict, dns_server: str) -> list[DNSFinding]:
         """Analyze DNS configuration"""
         findings = []
 
@@ -49,10 +47,10 @@ class DNSAnalyzer:
 
         return findings
 
-    def _detect_active_dns_servers(self, dns_config: Dict, opnsense_ip: str) -> List[Dict]:
+    def _detect_active_dns_servers(self, dns_config: dict, opnsense_ip: str) -> list[dict]:
         """Detect which DNS servers are actually in use"""
         servers = []
-        
+
         # OPNsense Unbound
         unbound = dns_config.get("unbound", {})
         if unbound.get("enabled", "0") == "1":
@@ -62,7 +60,7 @@ class DNSAnalyzer:
                 "name": "OPNsense Unbound",
                 "forwarding": unbound.get("forwarding", "0") == "1"
             })
-        
+
         # Check forwarding servers
         fwd_servers = unbound.get("forward_servers", [])
         for fwd in fwd_servers:
@@ -75,7 +73,7 @@ class DNSAnalyzer:
                     "name": fwd.get("name", "Forwarder"),
                     "dot": fwd.get("dot", False)
                 })
-        
+
         # Check dnsmasq
         dnsmasq = dns_config.get("dnsmasq", {})
         if dnsmasq.get("enabled", "0") == "1":
@@ -84,7 +82,7 @@ class DNSAnalyzer:
                 "type": "dnsmasq",
                 "name": "OPNsense Dnsmasq"
             })
-        
+
         # Check system DNS (resolv.conf)
         system_dns = dns_config.get("system_dns", [])
         for dns_ip in system_dns:
@@ -94,7 +92,7 @@ class DNSAnalyzer:
                     "type": "system",
                     "name": f"System DNS {dns_ip}"
                 })
-        
+
         # Check DHCP-assigned DNS for clients
         dhcp_dns = dns_config.get("dhcp_dns_servers", [])
         for dns_ip in dhcp_dns:
@@ -104,20 +102,19 @@ class DNSAnalyzer:
                     "type": "dhcp_assigned",
                     "name": f"DHCP DNS {dns_ip}"
                 })
-        
+
         return servers
 
-    def _analyze_active_dns_servers(self, servers: List[Dict]) -> List[DNSFinding]:
+    def _analyze_active_dns_servers(self, servers: list[dict]) -> list[DNSFinding]:
         """Analyze active DNS servers for security issues"""
         findings = []
-        
+
         public_dns = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9", "208.67.222.222"]
-        isp_patterns = ["isp", "provider", "telekom", "vodafone", "comcast"]
-        
+
         for srv in servers:
             ip = srv.get("ip", "")
             srv_type = srv.get("type", "")
-            
+
             # Check public DNS without DoT
             if ip in public_dns and not srv.get("dot", False):
                 findings.append(DNSFinding(
@@ -129,14 +126,14 @@ class DNSAnalyzer:
                     details={"server": ip, "encrypted": False},
                     opnsense_path="Services > Unbound DNS > Query Forwarding"
                 ))
-            
+
             # Test server response
             if ip and srv_type != "unbound":
                 test_result = self._test_external_dns(ip)
                 if test_result.get("issues"):
                     for issue in test_result["issues"]:
                         findings.append(issue)
-        
+
         # Check if no local DNS
         local_dns = [s for s in servers if s.get("type") in ["unbound", "dnsmasq"]]
         if not local_dns:
@@ -149,7 +146,7 @@ class DNSAnalyzer:
                 details={"active_servers": [s["ip"] for s in servers]},
                 opnsense_path="Services > Unbound DNS > General"
             ))
-        
+
         # Check forwarding mode without caching
         for srv in servers:
             if srv.get("type") == "unbound" and srv.get("forwarding"):
@@ -162,25 +159,25 @@ class DNSAnalyzer:
                     details={"mode": "forwarding"},
                     opnsense_path="Services > Unbound DNS > Query Forwarding"
                 ))
-        
+
         return findings
 
-    def _test_external_dns(self, dns_ip: str) -> Dict:
+    def _test_external_dns(self, dns_ip: str) -> dict:
         """Test external DNS server for issues"""
         result = {"issues": [], "latency": None}
-        
+
         try:
             resolver = dns.resolver.Resolver()
             resolver.nameservers = [dns_ip]
             resolver.timeout = 5
             resolver.lifetime = 5
-            
+
             import time
             start = time.time()
             resolver.resolve("google.com", "A")
             latency = (time.time() - start) * 1000
             result["latency"] = latency
-            
+
             # High latency warning
             if latency > 200:
                 result["issues"].append(DNSFinding(
@@ -192,7 +189,7 @@ class DNSAnalyzer:
                     details={"server": dns_ip, "latency_ms": latency},
                     opnsense_path="Services > Unbound DNS > Query Forwarding"
                 ))
-                
+
         except Exception as e:
             result["issues"].append(DNSFinding(
                 severity="HIGH",
@@ -203,10 +200,10 @@ class DNSAnalyzer:
                 details={"server": dns_ip, "error": str(e)},
                 opnsense_path="Services > Unbound DNS > Query Forwarding"
             ))
-        
+
         return result
 
-    def _analyze_dns_config(self, config: Dict) -> List[DNSFinding]:
+    def _analyze_dns_config(self, config: dict) -> list[DNSFinding]:
         """Analyze DNS configuration from OPNsense"""
         findings = []
 
@@ -284,7 +281,7 @@ class DNSAnalyzer:
                 details={"current": "no ACLs"},
                 opnsense_path="Services > Unbound DNS > Access Lists"
             ))
-        
+
         # Check cache size
         cache_size = unbound.get("cache_size", "")
         if not cache_size or int(cache_size or 0) < 50:
@@ -297,7 +294,7 @@ class DNSAnalyzer:
                 details={"current": cache_size or "default"},
                 opnsense_path="Services > Unbound DNS > Advanced > Cache Size"
             ))
-        
+
         # Check prefetch
         prefetch = unbound.get("prefetch", "0") == "1"
         if not prefetch:
@@ -313,7 +310,7 @@ class DNSAnalyzer:
 
         return findings
 
-    def _test_dns_server(self, dns_server: str) -> List[DNSFinding]:
+    def _test_dns_server(self, dns_server: str) -> list[DNSFinding]:
         """Perform active security tests on DNS server"""
         findings = []
 
@@ -354,7 +351,7 @@ class DNSAnalyzer:
 
             # Try to resolve an external domain
             try:
-                answer = resolver.resolve('google.com', 'A')
+                resolver.resolve('google.com', 'A')
                 # If we got an answer, it might be an open resolver
                 # However, this is expected for internal queries
                 # A true open resolver test would need to be done from external IP
@@ -396,7 +393,7 @@ class DNSAnalyzer:
                 return True
         return False
 
-    def get_dns_recommendations(self) -> List[str]:
+    def get_dns_recommendations(self) -> list[str]:
         """Get general DNS security recommendations"""
         return [
             "Aktiviere DNSSEC für DNS-Validierung",
