@@ -131,6 +131,27 @@ a:hover { color: var(--accent-2); }
 .muted-link { color: var(--dim); font-size: 11px; }
 .muted-link:hover { color: var(--muted); }
 
+.lang-switch {
+    display: flex;
+    gap: 2px;
+    border: 1px solid var(--border-strong);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.lang-btn {
+    background: transparent;
+    border: 0;
+    color: var(--dim);
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 6px;
+    cursor: pointer;
+    line-height: 1.4;
+    letter-spacing: 0.5px;
+}
+.lang-btn:hover { color: var(--muted); }
+.lang-btn.active { background: var(--accent); color: var(--bg); }
+
 /* main */
 .main { min-width: 0; display: flex; flex-direction: column; }
 .topbar {

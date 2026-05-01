@@ -1,64 +1,68 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OPNsense Security Auditor</title>
+    <title data-i18n="app.title">OPNsense Security Auditor</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <nav class="sidebar" aria-label="Hauptnavigation">
+    <nav class="sidebar" aria-label="navigation">
         <div class="brand">
             <span class="brand-mark">SEC</span>
             <span class="brand-name">audit</span>
         </div>
         <ul class="nav">
-            <li class="nav-item active" data-view="dashboard"><span class="nav-key">01</span> Uebersicht</li>
-            <li class="nav-item" data-view="findings"><span class="nav-key">02</span> Findings</li>
-            <li class="nav-item" data-view="firewall"><span class="nav-key">03</span> Firewall</li>
-            <li class="nav-item" data-view="dns"><span class="nav-key">04</span> DNS</li>
-            <li class="nav-item" data-view="system"><span class="nav-key">05</span> System</li>
-            <li class="nav-item" data-view="network"><span class="nav-key">06</span> Netzwerk</li>
-            <li class="nav-item" data-view="certs"><span class="nav-key">07</span> Zertifikate</li>
-            <li class="nav-item" data-view="config"><span class="nav-key">08</span> Konfiguration</li>
+            <li class="nav-item active" data-view="dashboard"><span class="nav-key">01</span><span data-i18n="nav.overview">Overview</span></li>
+            <li class="nav-item" data-view="findings"><span class="nav-key">02</span><span data-i18n="nav.findings">Findings</span></li>
+            <li class="nav-item" data-view="firewall"><span class="nav-key">03</span><span data-i18n="nav.firewall">Firewall</span></li>
+            <li class="nav-item" data-view="dns"><span class="nav-key">04</span><span data-i18n="nav.dns">DNS</span></li>
+            <li class="nav-item" data-view="system"><span class="nav-key">05</span><span data-i18n="nav.system">System</span></li>
+            <li class="nav-item" data-view="network"><span class="nav-key">06</span><span data-i18n="nav.network">Network</span></li>
+            <li class="nav-item" data-view="certs"><span class="nav-key">07</span><span data-i18n="nav.certs">Certificates</span></li>
+            <li class="nav-item" data-view="config"><span class="nav-key">08</span><span data-i18n="nav.config">Settings</span></li>
         </ul>
         <div class="sidebar-footer">
             <div class="conn" id="connection-status">
                 <span class="dot offline"></span>
-                <span class="conn-text">offline</span>
+                <span class="conn-text" data-i18n="conn.offline">offline</span>
             </div>
-            <a class="muted-link" href="https://www.paypal.me/RiDDiX93" target="_blank" rel="noopener">support</a>
+            <div class="lang-switch">
+                <button class="lang-btn" data-lang="en" type="button">EN</button>
+                <button class="lang-btn" data-lang="de" type="button">DE</button>
+            </div>
+            <a class="muted-link" href="https://www.paypal.me/RiDDiX93" target="_blank" rel="noopener" data-i18n="btn.support">support</a>
         </div>
     </nav>
 
     <main class="main">
         <header class="topbar">
             <div class="topbar-left">
-                <h1 id="view-title">Uebersicht</h1>
+                <h1 id="view-title" data-i18n="title.overview">Overview</h1>
                 <span class="host-badge" id="opnsense-host" title="OPNsense Host">--</span>
             </div>
             <div class="topbar-right">
-                <button class="btn primary" id="btn-start-scan">Scan starten</button>
-                <button class="btn ghost hidden" id="btn-download-report" title="HTML Report">Report</button>
-                <button class="btn ghost" id="btn-refresh" title="Aktualisieren">Aktualisieren</button>
+                <button class="btn primary" id="btn-start-scan" data-i18n="btn.start_scan">Start scan</button>
+                <button class="btn ghost hidden" id="btn-download-report" data-i18n="btn.report" data-i18n-title="btn.report">Report</button>
+                <button class="btn ghost" id="btn-refresh" data-i18n="btn.refresh">Reload</button>
             </div>
         </header>
 
         <section class="scan-panel hidden" id="scan-panel" aria-live="polite">
             <div class="scan-row">
-                <span class="scan-label">SCAN</span>
-                <span class="scan-step" id="scan-current-check">Initialisiere</span>
-                <button class="btn ghost danger" id="btn-cancel-scan">Abbrechen</button>
+                <span class="scan-label" data-i18n="scan.label">SCAN</span>
+                <span class="scan-step" id="scan-current-check" data-i18n="scan.init">Initializing</span>
+                <button class="btn ghost danger" id="btn-cancel-scan" data-i18n="btn.cancel_scan">Cancel</button>
             </div>
             <div class="bar"><div class="bar-fill" id="scan-progress-fill"></div></div>
             <div class="scan-meta">
-                <span><strong id="scan-progress-text">0%</strong> Fortschritt</span>
-                <span><strong id="stat-rules-checked">0</strong> Regeln</span>
-                <span><strong id="stat-findings">0</strong> Findings</span>
-                <span><strong id="stat-duration">0s</strong> Laufzeit</span>
+                <span><strong id="scan-progress-text">0%</strong> <span data-i18n="scan.progress">progress</span></span>
+                <span><strong id="stat-rules-checked">0</strong> <span data-i18n="scan.rules">rules</span></span>
+                <span><strong id="stat-findings">0</strong> <span data-i18n="scan.findings">findings</span></span>
+                <span><strong id="stat-duration">0s</strong> <span data-i18n="scan.runtime">runtime</span></span>
             </div>
             <pre class="scan-log" id="scan-log"></pre>
         </section>
@@ -67,7 +71,7 @@
             <div class="grid grid-3">
                 <article class="panel score-panel">
                     <header class="panel-head">
-                        <span class="panel-title">Security Score</span>
+                        <span class="panel-title" data-i18n="score.title">Security score</span>
                         <span class="panel-tag" id="security-grade">--</span>
                     </header>
                     <div class="score-body">
@@ -75,12 +79,12 @@
                             <circle class="ring-bg" cx="50" cy="50" r="45"/>
                             <circle class="ring-fg" cx="50" cy="50" r="45" id="score-circle"/>
                         </svg>
-                        <div class="score-num"><span id="security-score">--</span><small>/100</small></div>
+                        <div class="score-num"><span id="security-score">--</span><small data-i18n="score.unit">/100</small></div>
                     </div>
                 </article>
 
                 <article class="panel">
-                    <header class="panel-head"><span class="panel-title">Kategorien</span></header>
+                    <header class="panel-head"><span class="panel-title" data-i18n="score.categories">Categories</span></header>
                     <div class="bars">
                         <div class="bar-row">
                             <span class="bar-label">firewall</span>
@@ -106,37 +110,37 @@
                 </article>
 
                 <article class="panel">
-                    <header class="panel-head"><span class="panel-title">Severity</span></header>
+                    <header class="panel-head"><span class="panel-title" data-i18n="score.severity">Severity</span></header>
                     <div class="sev-grid">
-                        <div class="sev sev-critical"><span class="sev-num" id="count-critical">0</span><span class="sev-name">critical</span></div>
-                        <div class="sev sev-high"><span class="sev-num" id="count-high">0</span><span class="sev-name">high</span></div>
-                        <div class="sev sev-medium"><span class="sev-num" id="count-medium">0</span><span class="sev-name">medium</span></div>
-                        <div class="sev sev-low"><span class="sev-num" id="count-low">0</span><span class="sev-name">low</span></div>
+                        <div class="sev sev-critical"><span class="sev-num" id="count-critical">0</span><span class="sev-name" data-i18n="sev.critical">critical</span></div>
+                        <div class="sev sev-high"><span class="sev-num" id="count-high">0</span><span class="sev-name" data-i18n="sev.high">high</span></div>
+                        <div class="sev sev-medium"><span class="sev-num" id="count-medium">0</span><span class="sev-name" data-i18n="sev.medium">medium</span></div>
+                        <div class="sev sev-low"><span class="sev-num" id="count-low">0</span><span class="sev-name" data-i18n="sev.low">low</span></div>
                     </div>
                 </article>
             </div>
 
             <div class="grid grid-4 mt-16">
-                <div class="kv"><span class="kv-label">FW Regeln</span><span class="kv-value" id="stat-fw-rules">--</span></div>
-                <div class="kv"><span class="kv-label">NAT Regeln</span><span class="kv-value" id="stat-nat-rules">--</span></div>
-                <div class="kv"><span class="kv-label">Interfaces</span><span class="kv-value" id="stat-interfaces">--</span></div>
-                <div class="kv"><span class="kv-label">Letzter Scan</span><span class="kv-value" id="stat-last-scan">--</span></div>
+                <div class="kv"><span class="kv-label" data-i18n="kv.fw_rules">FW rules</span><span class="kv-value" id="stat-fw-rules">--</span></div>
+                <div class="kv"><span class="kv-label" data-i18n="kv.nat_rules">NAT rules</span><span class="kv-value" id="stat-nat-rules">--</span></div>
+                <div class="kv"><span class="kv-label" data-i18n="kv.interfaces">Interfaces</span><span class="kv-value" id="stat-interfaces">--</span></div>
+                <div class="kv"><span class="kv-label" data-i18n="kv.last_scan">Last scan</span><span class="kv-value" id="stat-last-scan">--</span></div>
             </div>
 
             <article class="panel mt-16">
                 <header class="panel-head">
-                    <span class="panel-title">Top Findings</span>
-                    <a href="#" class="link" data-view="findings">Alle Findings</a>
+                    <span class="panel-title" data-i18n="panel.top_findings">Top findings</span>
+                    <a href="#" class="link" data-view="findings" data-i18n="panel.link.all">All findings</a>
                 </header>
                 <div class="list" id="top-findings-list">
-                    <p class="empty">Noch kein Scan ausgefuehrt.</p>
+                    <p class="empty" data-i18n="empty.no_scan">No scan run yet.</p>
                 </div>
             </article>
 
             <article class="panel mt-16 hidden" id="scan-history-section">
                 <header class="panel-head">
-                    <span class="panel-title">Verlauf</span>
-                    <button class="btn ghost danger sm" id="btn-clear-history">Loeschen</button>
+                    <span class="panel-title" data-i18n="panel.history">History</span>
+                    <button class="btn ghost danger sm" id="btn-clear-history" data-i18n="btn.clear_history">Delete</button>
                 </header>
                 <div class="history-chart" id="history-chart"></div>
                 <div class="history-table" id="history-table"></div>
@@ -146,14 +150,14 @@
         <section class="view" id="view-findings">
             <div class="filter-bar">
                 <select id="filter-severity" class="select">
-                    <option value="all">Alle Schweregrade</option>
-                    <option value="critical">Critical</option>
-                    <option value="high">High</option>
-                    <option value="medium">Medium</option>
-                    <option value="low">Low</option>
+                    <option value="all" data-i18n="filter.severity_all">All severities</option>
+                    <option value="critical" data-i18n="sev.critical">critical</option>
+                    <option value="high" data-i18n="sev.high">high</option>
+                    <option value="medium" data-i18n="sev.medium">medium</option>
+                    <option value="low" data-i18n="sev.low">low</option>
                 </select>
                 <select id="filter-category" class="select">
-                    <option value="all">Alle Kategorien</option>
+                    <option value="all" data-i18n="filter.category_all">All categories</option>
                     <option value="firewall">firewall</option>
                     <option value="dns">dns</option>
                     <option value="system">system</option>
@@ -166,84 +170,84 @@
                     <option value="vulnerability">cve</option>
                     <option value="certificate">cert</option>
                 </select>
-                <input type="search" id="filter-search" class="input" placeholder="Suche in Issue oder Reason">
-                <span class="filter-count" id="filter-count">0 Treffer</span>
+                <input type="search" id="filter-search" class="input" data-i18n-placeholder="filter.search_placeholder" placeholder="Search">
+                <span class="filter-count" id="filter-count">0</span>
             </div>
             <div class="list" id="all-findings-list">
-                <p class="empty">Keine Findings vorhanden.</p>
+                <p class="empty" data-i18n="empty.no_findings">No findings.</p>
             </div>
         </section>
 
         <section class="view" id="view-firewall">
             <div class="grid grid-3">
-                <div class="kv"><span class="kv-label">analysiert</span><span class="kv-value" id="fw-total-rules">--</span></div>
-                <div class="kv warn"><span class="kv-label">problematisch</span><span class="kv-value" id="fw-problem-rules">--</span></div>
-                <div class="kv crit"><span class="kv-label">any-to-any</span><span class="kv-value" id="fw-any-rules">--</span></div>
+                <div class="kv"><span class="kv-label" data-i18n="kv.analyzed">analyzed</span><span class="kv-value" id="fw-total-rules">--</span></div>
+                <div class="kv warn"><span class="kv-label" data-i18n="kv.problematic">problematic</span><span class="kv-value" id="fw-problem-rules">--</span></div>
+                <div class="kv crit"><span class="kv-label" data-i18n="kv.any_to_any">any-to-any</span><span class="kv-value" id="fw-any-rules">--</span></div>
             </div>
             <article class="panel mt-16">
-                <header class="panel-head"><span class="panel-title">Findings auf Regeln</span></header>
-                <div class="list" id="fw-rules-list"><p class="empty">Noch keine Daten.</p></div>
+                <header class="panel-head"><span class="panel-title" data-i18n="panel.fw_findings">Findings on rules</span></header>
+                <div class="list" id="fw-rules-list"><p class="empty" data-i18n="empty.no_data">No data yet.</p></div>
             </article>
         </section>
 
         <section class="view" id="view-dns">
             <div class="grid grid-3">
-                <div class="kv"><span class="kv-label">DNSSEC</span><span class="kv-value" id="dns-dnssec">--</span></div>
-                <div class="kv"><span class="kv-label">DoT</span><span class="kv-value" id="dns-dot">--</span></div>
-                <div class="kv"><span class="kv-label">Rebind</span><span class="kv-value" id="dns-rebind">--</span></div>
+                <div class="kv"><span class="kv-label" data-i18n="kv.dnssec">DNSSEC</span><span class="kv-value" id="dns-dnssec">--</span></div>
+                <div class="kv"><span class="kv-label" data-i18n="kv.dot">DoT</span><span class="kv-value" id="dns-dot">--</span></div>
+                <div class="kv"><span class="kv-label" data-i18n="kv.rebind">Rebind</span><span class="kv-value" id="dns-rebind">--</span></div>
             </div>
             <article class="panel mt-16">
-                <header class="panel-head"><span class="panel-title">Konfigurierte DNS Server</span></header>
-                <div class="list" id="dns-servers-list"><p class="empty">Noch keine Daten.</p></div>
+                <header class="panel-head"><span class="panel-title" data-i18n="panel.dns_servers">Configured DNS servers</span></header>
+                <div class="list" id="dns-servers-list"><p class="empty" data-i18n="empty.no_data">No data yet.</p></div>
             </article>
         </section>
 
         <section class="view" id="view-system">
             <article class="panel">
-                <header class="panel-head"><span class="panel-title">System Findings</span></header>
-                <div class="list" id="system-checks"><p class="empty">Noch keine Daten.</p></div>
+                <header class="panel-head"><span class="panel-title" data-i18n="panel.system_findings">System findings</span></header>
+                <div class="list" id="system-checks"><p class="empty" data-i18n="empty.no_data">No data yet.</p></div>
             </article>
         </section>
 
         <section class="view" id="view-network">
             <div class="topbar topbar-inner">
                 <div class="topbar-left">
-                    <input type="search" id="device-search" class="input" placeholder="IP, Hostname oder MAC">
+                    <input type="search" id="device-search" class="input" data-i18n-placeholder="net.search_placeholder" placeholder="IP, hostname or MAC">
                 </div>
                 <div class="topbar-right">
-                    <button class="btn ghost" id="btn-network-scan">Internen Scan starten</button>
-                    <button class="btn ghost danger hidden" id="btn-network-scan-cancel">Abbrechen</button>
+                    <button class="btn ghost" id="btn-network-scan" data-i18n="btn.start_internal">Start internal scan</button>
+                    <button class="btn ghost danger hidden" id="btn-network-scan-cancel" data-i18n="btn.network_cancel">Cancel</button>
                 </div>
             </div>
             <div class="grid grid-3 mt-16">
-                <div class="kv"><span class="kv-label">Geraete</span><span class="kv-value" id="stat-total-devices">--</span></div>
-                <div class="kv"><span class="kv-label">offene Ports</span><span class="kv-value" id="stat-total-open-ports">--</span></div>
-                <div class="kv"><span class="kv-label">Netze</span><span class="kv-value" id="stat-total-networks">--</span></div>
+                <div class="kv"><span class="kv-label" data-i18n="kv.devices">Devices</span><span class="kv-value" id="stat-total-devices">--</span></div>
+                <div class="kv"><span class="kv-label" data-i18n="kv.open_ports">Open ports</span><span class="kv-value" id="stat-total-open-ports">--</span></div>
+                <div class="kv"><span class="kv-label" data-i18n="kv.networks">Networks</span><span class="kv-value" id="stat-total-networks">--</span></div>
             </div>
             <div class="scan-panel hidden mt-16" id="net-scan-panel">
                 <div class="scan-row">
-                    <span class="scan-label">NETSCAN</span>
-                    <span class="scan-step" id="net-scan-step">Wartet</span>
+                    <span class="scan-label" data-i18n="net.scan_label">NETSCAN</span>
+                    <span class="scan-step" id="net-scan-step" data-i18n="scan.waiting">waiting</span>
                 </div>
                 <div class="bar"><div class="bar-fill" id="net-scan-fill"></div></div>
                 <pre class="scan-log" id="net-scan-log"></pre>
             </div>
             <article class="panel mt-16">
-                <header class="panel-head"><span class="panel-title">Geraete</span></header>
+                <header class="panel-head"><span class="panel-title" data-i18n="panel.devices">Devices</span></header>
                 <table class="data-table" id="devices-table">
                     <thead>
                         <tr>
-                            <th>S</th>
-                            <th>IP</th>
-                            <th>Hostname</th>
-                            <th>MAC</th>
-                            <th>Netz</th>
-                            <th>VLAN</th>
-                            <th>Ports</th>
+                            <th data-i18n="table.status">S</th>
+                            <th data-i18n="table.ip">IP</th>
+                            <th data-i18n="table.hostname">Hostname</th>
+                            <th data-i18n="table.mac">MAC</th>
+                            <th data-i18n="table.network">Network</th>
+                            <th data-i18n="table.vlan">VLAN</th>
+                            <th data-i18n="table.ports">Ports</th>
                         </tr>
                     </thead>
                     <tbody id="devices-tbody">
-                        <tr><td colspan="7" class="empty-cell">Noch kein interner Scan ausgefuehrt.</td></tr>
+                        <tr><td colspan="7" class="empty-cell" data-i18n="empty.no_internal_scan">Run an internal scan to see devices.</td></tr>
                     </tbody>
                 </table>
             </article>
@@ -251,79 +255,93 @@
 
         <section class="view" id="view-certs">
             <article class="panel">
-                <header class="panel-head"><span class="panel-title">Zertifikat-Findings</span></header>
-                <div class="list" id="cert-list"><p class="empty">Noch keine Daten.</p></div>
+                <header class="panel-head"><span class="panel-title" data-i18n="panel.cert_findings">Certificate findings</span></header>
+                <div class="list" id="cert-list"><p class="empty" data-i18n="empty.no_data">No data yet.</p></div>
             </article>
         </section>
 
         <section class="view" id="view-config">
             <article class="panel">
-                <header class="panel-head"><span class="panel-title">OPNsense API</span></header>
+                <header class="panel-head"><span class="panel-title" data-i18n="panel.api">OPNsense API</span></header>
                 <div class="form">
                     <div class="form-row">
-                        <label for="cfg-host">Host</label>
-                        <input type="text" id="cfg-host" class="input" placeholder="192.168.1.1 oder fw.example.lan">
+                        <label for="cfg-host" data-i18n="form.host">Host</label>
+                        <input type="text" id="cfg-host" class="input" data-i18n-placeholder="form.host_placeholder" placeholder="192.168.1.1">
                     </div>
                     <div class="form-row">
-                        <label for="cfg-apikey">API Key</label>
-                        <input type="text" id="cfg-apikey" class="input mono" placeholder="System &gt; Access &gt; Users &gt; API Keys">
+                        <label for="cfg-apikey" data-i18n="form.api_key">API key</label>
+                        <input type="text" id="cfg-apikey" class="input mono" data-i18n-placeholder="form.api_key_placeholder" placeholder="API key">
                     </div>
                     <div class="form-row">
-                        <label for="cfg-apisecret">API Secret</label>
-                        <input type="password" id="cfg-apisecret" class="input mono" placeholder="Secret">
+                        <label for="cfg-apisecret" data-i18n="form.api_secret">API secret</label>
+                        <input type="password" id="cfg-apisecret" class="input mono" data-i18n-placeholder="form.api_secret_placeholder" placeholder="Secret">
                     </div>
                     <div class="form-row checkbox-row">
-                        <label class="checkbox"><input type="checkbox" id="cfg-insecure-tls"> Self-signed Zertifikat akzeptieren</label>
+                        <label class="checkbox"><input type="checkbox" id="cfg-insecure-tls"> <span data-i18n="form.insecure_tls">Accept self signed certificate</span></label>
                     </div>
                     <div class="form-actions">
-                        <button class="btn ghost" id="btn-test-connection">Verbindung testen</button>
-                        <button class="btn primary" id="btn-save-config">Speichern</button>
+                        <button class="btn ghost" id="btn-test-connection" data-i18n="btn.test_connection">Test connection</button>
+                        <button class="btn primary" id="btn-save-config" data-i18n="btn.save">Save</button>
                     </div>
                     <div class="connection-result hidden" id="connection-result"></div>
                 </div>
             </article>
 
             <article class="panel mt-16">
-                <header class="panel-head"><span class="panel-title">Scan-Schedule</span></header>
+                <header class="panel-head"><span class="panel-title" data-i18n="panel.schedule">Scan schedule</span></header>
                 <div class="form">
                     <div class="form-row checkbox-row">
-                        <label class="checkbox"><input type="checkbox" id="schedule-enabled"> Automatische Scans aktivieren</label>
+                        <label class="checkbox"><input type="checkbox" id="schedule-enabled"> <span data-i18n="form.schedule_enable">Enable scheduled scans</span></label>
                     </div>
                     <div class="form-row">
-                        <label for="schedule-interval">Intervall</label>
+                        <label for="schedule-interval" data-i18n="form.interval">Interval</label>
                         <select id="schedule-interval" class="select">
-                            <option value="1">stuendlich</option>
-                            <option value="6">alle 6 h</option>
-                            <option value="12">alle 12 h</option>
-                            <option value="24" selected>taeglich</option>
-                            <option value="48">alle 2 Tage</option>
-                            <option value="168">woechentlich</option>
+                            <option value="1" data-i18n="schedule.hourly">hourly</option>
+                            <option value="6" data-i18n="schedule.6h">every 6 h</option>
+                            <option value="12" data-i18n="schedule.12h">every 12 h</option>
+                            <option value="24" selected data-i18n="schedule.daily">daily</option>
+                            <option value="48" data-i18n="schedule.2d">every 2 days</option>
+                            <option value="168" data-i18n="schedule.weekly">weekly</option>
                         </select>
                     </div>
                     <div class="form-row">
-                        <label>Naechster Lauf</label>
-                        <span class="kv-value mono" id="schedule-next-run">nicht geplant</span>
+                        <label data-i18n="form.next_run">Next run</label>
+                        <span class="kv-value mono" id="schedule-next-run" data-i18n="form.next_run_unset">not scheduled</span>
                     </div>
                     <div class="form-actions">
-                        <button class="btn primary" id="btn-save-schedule">Speichern</button>
+                        <button class="btn primary" id="btn-save-schedule" data-i18n="btn.save_schedule">Save schedule</button>
+                    </div>
+                </div>
+            </article>
+
+            <article class="panel mt-16">
+                <header class="panel-head"><span class="panel-title" data-i18n="form.language">Language</span></header>
+                <div class="form">
+                    <div class="form-row">
+                        <label for="cfg-language" data-i18n="form.language">Language</label>
+                        <select id="cfg-language" class="select">
+                            <option value="auto" data-i18n="lang.auto">automatic</option>
+                            <option value="en" data-i18n="lang.en">English</option>
+                            <option value="de" data-i18n="lang.de">Deutsch</option>
+                        </select>
                     </div>
                 </div>
             </article>
 
             <article class="panel mt-16">
                 <header class="panel-head">
-                    <span class="panel-title">Netzwerke fuer Scan</span>
-                    <button class="btn ghost sm" id="btn-fetch-networks">Aus OPNsense laden</button>
+                    <span class="panel-title" data-i18n="panel.networks_for_scan">Networks for scan</span>
+                    <button class="btn ghost sm" id="btn-fetch-networks" data-i18n="btn.fetch_networks">Load from OPNsense</button>
                 </header>
-                <div class="list" id="networks-list"><p class="empty">Noch nicht geladen.</p></div>
+                <div class="list" id="networks-list"><p class="empty" data-i18n="empty.networks_unset">Not loaded yet.</p></div>
                 <div class="form-actions">
-                    <button class="btn primary" id="btn-save-networks">Auswahl speichern</button>
+                    <button class="btn primary" id="btn-save-networks" data-i18n="btn.save_networks">Save selection</button>
                 </div>
             </article>
 
             <article class="panel mt-16">
-                <header class="panel-head"><span class="panel-title">Ausnahmen</span></header>
-                <div class="list" id="ignore-list"><p class="empty">Keine Ausnahmen.</p></div>
+                <header class="panel-head"><span class="panel-title" data-i18n="panel.ignore">Exceptions</span></header>
+                <div class="list" id="ignore-list"><p class="empty" data-i18n="empty.no_exceptions">No exceptions.</p></div>
             </article>
         </section>
     </main>
@@ -333,11 +351,11 @@
         <div class="modal-content">
             <header class="modal-head">
                 <h3 id="modal-title">Finding</h3>
-                <button class="btn ghost sm" id="modal-close" aria-label="Schliessen">x</button>
+                <button class="btn ghost sm" id="modal-close" data-i18n="modal.close" aria-label="close">x</button>
             </header>
             <div class="modal-body" id="modal-body"></div>
             <footer class="modal-foot" id="modal-footer">
-                <button class="btn ghost sm" id="btn-exclude-finding">Ausnahme hinzufuegen</button>
+                <button class="btn ghost sm" id="btn-exclude-finding" data-i18n="btn.exclude">Add exception</button>
             </footer>
         </div>
     </div>

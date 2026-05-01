@@ -52,7 +52,98 @@
         netPoll: null,
         scanRunning: false,
         scanStarted: 0,
+        lang: 'en',
+        langPref: 'auto',
+        translations: {},
     };
+
+    // ---------- i18n ----------
+    const LANG_KEY = 'secops_lang';
+    const SUPPORTED = ['en', 'de'];
+
+    function detectBrowserLang() {
+        const cands = []
+            .concat(navigator.languages || [])
+            .concat(navigator.language ? [navigator.language] : []);
+        for (const c of cands) {
+            const head = String(c || '').toLowerCase().split('-')[0];
+            if (SUPPORTED.includes(head)) return head;
+        }
+        return 'en';
+    }
+    function readLangPref() {
+        const v = localStorage.getItem(LANG_KEY);
+        if (v === 'en' || v === 'de' || v === 'auto') return v;
+        return 'auto';
+    }
+    function effectiveLang(pref) {
+        if (pref === 'en' || pref === 'de') return pref;
+        return detectBrowserLang();
+    }
+    function t(key, fallback) {
+        const dict = state.translations[state.lang] || {};
+        if (dict[key] != null) return dict[key];
+        const en = state.translations.en || {};
+        if (en[key] != null) return en[key];
+        return fallback != null ? fallback : key;
+    }
+    async function loadTranslations(lang) {
+        if (state.translations[lang]) return;
+        try {
+            const r = await fetch('/api/translations/' + encodeURIComponent(lang));
+            if (!r.ok) return;
+            const data = await r.json();
+            if (data && data.success && data.translations) {
+                state.translations[lang] = data.translations;
+            }
+        } catch (e) { /* ignore */ }
+    }
+    function applyI18n(root) {
+        root = root || document;
+        document.documentElement.lang = state.lang;
+        root.querySelectorAll('[data-i18n]').forEach((el) => {
+            const key = el.getAttribute('data-i18n');
+            if (!key) return;
+            el.textContent = t(key);
+        });
+        root.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+            const key = el.getAttribute('data-i18n-placeholder');
+            if (key) el.setAttribute('placeholder', t(key));
+        });
+        root.querySelectorAll('[data-i18n-title]').forEach((el) => {
+            const key = el.getAttribute('data-i18n-title');
+            if (key) el.setAttribute('title', t(key));
+        });
+        root.querySelectorAll('[data-i18n-aria-label]').forEach((el) => {
+            const key = el.getAttribute('data-i18n-aria-label');
+            if (key) el.setAttribute('aria-label', t(key));
+        });
+        document.querySelectorAll('.lang-btn').forEach((b) => {
+            b.classList.toggle('active', b.dataset.lang === state.lang);
+        });
+        const cfgLang = document.getElementById('cfg-language');
+        if (cfgLang) cfgLang.value = state.langPref;
+        const titleEl = document.getElementById('view-title');
+        if (titleEl && titleEl.dataset.i18n) titleEl.textContent = t(titleEl.dataset.i18n);
+    }
+    async function setLanguage(pref) {
+        const newPref = (pref === 'en' || pref === 'de' || pref === 'auto') ? pref : 'auto';
+        localStorage.setItem(LANG_KEY, newPref);
+        state.langPref = newPref;
+        state.lang = effectiveLang(newPref);
+        await loadTranslations(state.lang);
+        applyI18n();
+        // Re-render dynamic content with new strings.
+        if (state.results) {
+            renderDashboard();
+            renderFindings();
+            renderFirewall();
+            renderDns();
+            renderSystem();
+            renderCerts();
+            renderDevices(state.devices);
+        }
+    }
 
     const $ = (id) => document.getElementById(id);
     const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -107,17 +198,12 @@
     function setView(name) {
         $$('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.view === name));
         $$('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + name));
-        const titles = {
-            dashboard: 'Uebersicht',
-            findings: 'Findings',
-            firewall: 'Firewall',
-            dns: 'DNS',
-            system: 'System',
-            network: 'Netzwerk',
-            certs: 'Zertifikate',
-            config: 'Konfiguration',
-        };
-        $('view-title').textContent = titles[name] || name;
+        const titleKey = 'title.' + (name === 'dashboard' ? 'overview' : name);
+        const titleEl = $('view-title');
+        if (titleEl) {
+            titleEl.dataset.i18n = titleKey;
+            titleEl.textContent = t(titleKey, name);
+        }
         if (name === 'config') {
             loadIgnoreList();
             loadNetworksSelected();
@@ -146,7 +232,7 @@
             $('opnsense-host').textContent = cfg.host || '--';
             updateConnDot(!!cfg.host && cfg.api_key_set);
         } catch (e) {
-            toast('error', 'Konfiguration konnte nicht geladen werden');
+            toast('error', t('toast.config_load_failed'));
         }
     }
 
@@ -160,20 +246,20 @@
         try {
             const data = await apiPost(API.config, { opnsense: cfg });
             if (data.success) {
-                toast('success', 'Konfiguration gespeichert');
+                toast('success', t('toast.config_saved'));
                 loadConfig();
             } else {
-                toast('error', data.error || 'Speichern fehlgeschlagen');
+                toast('error', data.error || t('toast.save_failed'));
             }
         } catch (e) {
-            toast('error', 'Speichern fehlgeschlagen');
+            toast('error', t('toast.save_failed'));
         }
     }
 
     async function testConnection() {
         const out = $('connection-result');
         out.classList.remove('hidden', 'ok', 'err');
-        out.textContent = 'Teste...';
+        out.textContent = '...';
         try {
             const body = {
                 host: $('cfg-host').value.trim(),
@@ -184,16 +270,16 @@
             const data = await apiPost(API.connection, body);
             if (data.success) {
                 out.classList.add('ok');
-                out.textContent = 'OK ' + (data.version ? 'OPNsense ' + data.version : '');
+                out.textContent = t('toast.connection_ok') + ' ' + (data.version ? 'OPNsense ' + data.version : '');
                 updateConnDot(true);
             } else {
                 out.classList.add('err');
-                out.textContent = data.error || 'Verbindung fehlgeschlagen';
+                out.textContent = data.error || t('toast.connection_failed');
                 updateConnDot(false);
             }
         } catch (e) {
             out.classList.add('err');
-            out.textContent = 'Verbindung fehlgeschlagen';
+            out.textContent = t('toast.connection_failed');
             updateConnDot(false);
         }
     }
@@ -205,10 +291,10 @@
         const txt = wrap.querySelector('.conn-text');
         if (online) {
             dot.classList.remove('offline'); dot.classList.add('online');
-            txt.textContent = 'verbunden';
+            txt.textContent = t('conn.online');
         } else {
             dot.classList.remove('online'); dot.classList.add('offline');
-            txt.textContent = 'offline';
+            txt.textContent = t('conn.offline');
         }
     }
 
@@ -217,7 +303,7 @@
         try {
             const data = await apiPost(API.scanStart);
             if (!data.success) {
-                toast('error', data.error || 'Scan konnte nicht gestartet werden');
+                toast('error', data.error || t('toast.scan_start_failed'));
                 return;
             }
             state.scanRunning = true;
@@ -225,7 +311,7 @@
             showScanPanel();
             startScanPolling();
         } catch (e) {
-            toast('error', 'Scan-Start fehlgeschlagen');
+            toast('error', t('toast.scan_start_failed'));
         }
     }
 
@@ -262,9 +348,9 @@
                 stopScanPolling();
                 state.scanRunning = false;
                 hideScanPanel();
-                if (data.status === 'completed') toast('success', 'Scan abgeschlossen');
-                else if (data.status === 'failed') toast('error', 'Scan fehlgeschlagen');
-                else if (data.status === 'cancelled') toast('warning', 'Scan abgebrochen');
+                if (data.status === 'completed') toast('success', t('toast.scan_done'));
+                else if (data.status === 'failed') toast('error', t('toast.scan_failed'));
+                else if (data.status === 'cancelled') toast('warning', t('toast.scan_cancelled'));
                 loadResults();
                 loadHistory();
             }
@@ -299,7 +385,7 @@
         try {
             const data = await apiGet(API.results);
             if (!data.success) {
-                $('top-findings-list').innerHTML = '<p class="empty">Noch kein Scan ausgefuehrt.</p>';
+                $('top-findings-list').innerHTML = '<p class="empty">' + escapeHtml(t('empty.no_scan')) + '</p>';
                 return;
             }
             state.results = data.results || {};
@@ -404,7 +490,7 @@
             .slice(0, 6);
         const c = $('top-findings-list');
         if (!top.length) {
-            c.innerHTML = '<p class="empty">Keine kritischen Findings.</p>';
+            c.innerHTML = '<p class="empty">' + escapeHtml(t('empty.no_critical')) + '</p>';
             return;
         }
         c.innerHTML = top.map(rowHtml).join('');
@@ -452,11 +538,11 @@
         });
         const c = $('all-findings-list');
         if (!filtered.length) {
-            c.innerHTML = '<p class="empty">Keine Findings entsprechen dem Filter.</p>';
+            c.innerHTML = '<p class="empty">' + escapeHtml(t('empty.no_filter_match')) + '</p>';
         } else {
             c.innerHTML = filtered.map(rowHtml).join('');
         }
-        $('filter-count').textContent = filtered.length + ' Treffer';
+        $('filter-count').textContent = filtered.length + ' ' + t('filter.results_count');
     }
 
     // ---------- firewall view ----------
@@ -469,7 +555,7 @@
         const c = $('fw-rules-list');
         c.innerHTML = fw.length
             ? fw.map((f) => Object.assign({}, f, { _category: 'firewall' })).map(rowHtml).join('')
-            : '<p class="empty">Keine Firewall-Findings.</p>';
+            : '<p class="empty">' + escapeHtml(t('empty.no_findings')) + '</p>';
     }
 
     // ---------- dns view ----------
@@ -482,7 +568,7 @@
         const servers = dnsCfg.forwarders || (r.dns_config || {}).forward_servers || [];
         const c = $('dns-servers-list');
         if (!servers.length) {
-            c.innerHTML = '<p class="empty">Keine Forwarder konfiguriert.</p>';
+            c.innerHTML = '<p class="empty">' + escapeHtml(t('empty.no_dns_forwarders')) + '</p>';
         } else {
             c.innerHTML = servers.map((s) =>
                 '<div class="ignore-row">'
@@ -494,7 +580,7 @@
     }
     function truthLabel(v) {
         const s = (v == null ? '' : String(v)).toLowerCase();
-        return ['1', 'true', 'yes', 'on', 'enabled'].includes(s) ? 'aktiv' : 'inaktiv';
+        return ['1', 'true', 'yes', 'on', 'enabled'].includes(s) ? t('value.active') : t('value.inactive');
     }
 
     // ---------- system view ----------
@@ -503,7 +589,7 @@
         const c = $('system-checks');
         c.innerHTML = sys.length
             ? sys.map((f) => Object.assign({}, f, { _category: 'system' })).map(rowHtml).join('')
-            : '<p class="empty">Keine System-Findings.</p>';
+            : '<p class="empty">' + escapeHtml(t('empty.no_findings')) + '</p>';
     }
 
     // ---------- certs view ----------
@@ -512,7 +598,7 @@
         const c = $('cert-list');
         c.innerHTML = list.length
             ? list.map((f) => Object.assign({}, f, { _category: 'certificate' })).map(rowHtml).join('')
-            : '<p class="empty">Keine Zertifikat-Findings.</p>';
+            : '<p class="empty">' + escapeHtml(t('empty.no_findings')) + '</p>';
     }
 
     // ---------- devices ----------
@@ -524,7 +610,7 @@
         $('stat-total-open-ports').textContent = stats.total_open_ports ?? state.devices.reduce((a, d) => a + ((d.open_ports || []).length), 0);
         $('stat-total-networks').textContent = Object.keys(stats.devices_by_network || {}).length || '--';
         if (!state.devices.length) {
-            tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">Noch keine Geraete erfasst.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">' + escapeHtml(t('empty.no_devices')) + '</td></tr>';
             return;
         }
         tbody.innerHTML = filteredDevices().map(deviceRow).join('');
@@ -557,13 +643,13 @@
     async function startInternalScan() {
         try {
             const data = await apiPost(API.scanInternalStart, {});
-            if (!data.success) { toast('error', data.error || 'Konnte nicht gestartet werden'); return; }
+            if (!data.success) { toast('error', data.error || t('toast.internal_scan_start_failed')); return; }
             $('net-scan-panel').classList.remove('hidden');
             $('btn-network-scan').classList.add('hidden');
             $('btn-network-scan-cancel').classList.remove('hidden');
             startNetPolling();
         } catch (e) {
-            toast('error', 'Internal-Scan fehlgeschlagen');
+            toast('error', t('toast.internal_scan_start_failed'));
         }
     }
     async function cancelInternalScan() {
@@ -593,9 +679,9 @@
                 stopNetPolling();
                 $('btn-network-scan').classList.remove('hidden');
                 $('btn-network-scan-cancel').classList.add('hidden');
-                if (data.status === 'completed') toast('success', 'Interner Scan fertig');
-                else if (data.status === 'failed') toast('error', 'Interner Scan fehlgeschlagen');
-                else if (data.status === 'cancelled') toast('warning', 'Interner Scan abgebrochen');
+                if (data.status === 'completed') toast('success', t('toast.internal_scan_done'));
+                else if (data.status === 'failed') toast('error', t('toast.internal_scan_failed'));
+                else if (data.status === 'cancelled') toast('warning', t('toast.internal_scan_cancelled'));
             }
         } catch (e) { /* keep polling */ }
     }
@@ -607,7 +693,7 @@
             const list = $('networks-list');
             const networks = (data.networks || []);
             if (!networks.length) {
-                list.innerHTML = '<p class="empty">Noch keine Netze ausgewaehlt. Aus OPNsense laden.</p>';
+                list.innerHTML = '<p class="empty">' + escapeHtml(t('empty.networks_unset')) + '</p>';
                 return;
             }
             list.innerHTML = networks.map((n) =>
@@ -621,11 +707,11 @@
     async function fetchNetworks() {
         try {
             const data = await apiGet(API.networks);
-            if (!data.success) { toast('error', data.error || 'Konnte Netze nicht laden'); return; }
+            if (!data.success) { toast('error', data.error || t('toast.networks_load_failed')); return; }
             const list = $('networks-list');
             const nets = data.networks || [];
             if (!nets.length) {
-                list.innerHTML = '<p class="empty">Keine Netze gefunden.</p>';
+                list.innerHTML = '<p class="empty">' + escapeHtml(t('empty.networks_unset')) + '</p>';
                 return;
             }
             list.innerHTML = nets.map((n) =>
@@ -634,9 +720,9 @@
                 + '<span class="cidr">' + escapeHtml(n.network || '') + '</span>'
                 + '</div>'
             ).join('');
-            toast('success', nets.length + ' Netze geladen');
+            toast('success', t('toast.networks_loaded_pre') + ' ' + nets.length + ' ' + t('toast.networks_loaded_suf'));
         } catch (e) {
-            toast('error', 'Konnte Netze nicht laden');
+            toast('error', t('toast.networks_load_failed'));
         }
     }
     async function saveNetworks() {
@@ -648,10 +734,10 @@
         }));
         try {
             const data = await apiPost(API.networksSelected, { networks: selected });
-            if (data.success) toast('success', 'Auswahl gespeichert');
-            else toast('error', data.error || 'Speichern fehlgeschlagen');
+            if (data.success) toast('success', t('toast.networks_saved'));
+            else toast('error', data.error || t('toast.save_failed'));
         } catch (e) {
-            toast('error', 'Speichern fehlgeschlagen');
+            toast('error', t('toast.save_failed'));
         }
     }
 
@@ -666,7 +752,7 @@
                 (items || []).forEach((it, idx) => flat.push({ category: cat, index: idx, item: it }));
             }
             if (!flat.length) {
-                list.innerHTML = '<p class="empty">Keine Ausnahmen.</p>';
+                list.innerHTML = '<p class="empty">' + escapeHtml(t('empty.no_exceptions')) + '</p>';
                 return;
             }
             list.innerHTML = flat.map(({ category, index, item }) => {
@@ -685,10 +771,10 @@
         if (!category || isNaN(index)) return;
         try {
             const data = await apiPost(API.ignoreRemove, { category, index });
-            if (data.success) { toast('success', 'Ausnahme entfernt'); loadIgnoreList(); }
-            else toast('error', data.error || 'Entfernen fehlgeschlagen');
+            if (data.success) { toast('success', t('toast.exception_removed')); loadIgnoreList(); }
+            else toast('error', data.error || t('toast.exception_failed'));
         } catch (e) {
-            toast('error', 'Entfernen fehlgeschlagen');
+            toast('error', t('toast.exception_failed'));
         }
     }
 
@@ -717,15 +803,15 @@
         } catch (e) { /* ignore */ }
     }
     async function clearHistory() {
-        if (!confirm('Alle Reports unwiderruflich loeschen?')) return;
+        if (!confirm(t('modal.confirm_clear'))) return;
         try {
             const data = await apiPost(API.clearHistory);
             if (data.success) {
-                toast('success', (data.deleted || 0) + ' Reports geloescht');
+                toast('success', (data.deleted || 0) + ' ' + t('toast.history_cleared_suf'));
                 loadResults(); loadHistory();
             }
         } catch (e) {
-            toast('error', 'Loeschen fehlgeschlagen');
+            toast('error', t('toast.history_clear_failed'));
         }
     }
 
@@ -737,7 +823,14 @@
             const s = data.schedule || {};
             $('schedule-enabled').checked = !!s.enabled;
             $('schedule-interval').value = String(s.interval_hours || 24);
-            $('schedule-next-run').textContent = s.next_run ? fmtTime(s.next_run) : 'nicht geplant';
+            const nextEl = $('schedule-next-run');
+            if (s.next_run) {
+                nextEl.removeAttribute('data-i18n');
+                nextEl.textContent = fmtTime(s.next_run);
+            } else {
+                nextEl.setAttribute('data-i18n', 'form.next_run_unset');
+                nextEl.textContent = t('form.next_run_unset');
+            }
         } catch (e) { /* ignore */ }
     }
     async function saveSchedule() {
@@ -747,10 +840,10 @@
         };
         try {
             const data = await apiPost(API.schedule, body);
-            if (data.success) { toast('success', 'Schedule gespeichert'); loadSchedule(); }
-            else toast('error', data.error || 'Speichern fehlgeschlagen');
+            if (data.success) { toast('success', t('toast.schedule_saved')); loadSchedule(); }
+            else toast('error', data.error || t('toast.save_failed'));
         } catch (e) {
-            toast('error', 'Speichern fehlgeschlagen');
+            toast('error', t('toast.save_failed'));
         }
     }
 
@@ -762,33 +855,33 @@
         const sev = severityKey(f.severity);
         const sections = [];
         if (f.opnsense_path) {
-            sections.push(section('Pfad', '<span class="path-tag">' + escapeHtml(f.opnsense_path) + '</span>'));
+            sections.push(section(t('modal.path'), '<span class="path-tag">' + escapeHtml(f.opnsense_path) + '</span>'));
         }
         if (f.current_value || f.recommended_value) {
-            sections.push(section('Vergleich',
+            sections.push(section(t('modal.compare'),
                 '<div class="compare-grid">'
-                + '<div class="compare-cell bad"><div class="label">aktuell</div><div class="value">' + escapeHtml(f.current_value || '') + '</div></div>'
-                + '<div class="compare-cell good"><div class="label">empfohlen</div><div class="value">' + escapeHtml(f.recommended_value || '') + '</div></div>'
+                + '<div class="compare-cell bad"><div class="label">' + escapeHtml(t('modal.current')) + '</div><div class="value">' + escapeHtml(f.current_value || '') + '</div></div>'
+                + '<div class="compare-cell good"><div class="label">' + escapeHtml(t('modal.recommended')) + '</div><div class="value">' + escapeHtml(f.recommended_value || '') + '</div></div>'
                 + '</div>'));
         }
         if (f.reason || f.description) {
-            sections.push(section('Grund', '<p>' + escapeHtml(f.reason || f.description) + '</p>'));
+            sections.push(section(t('modal.reason'), '<p>' + escapeHtml(f.reason || f.description) + '</p>'));
         }
         if (f.solution) {
-            sections.push(section('Loesung', '<p>' + escapeHtml(f.solution) + '</p>'));
+            sections.push(section(t('modal.solution'), '<p>' + escapeHtml(f.solution) + '</p>'));
         }
         const steps = (f.implementation_steps || []).filter((s) => s);
         if (steps.length) {
-            sections.push(section('Schritte', '<ol>' + steps.map((s) => '<li>' + escapeHtml(s) + '</li>').join('') + '</ol>'));
+            sections.push(section(t('modal.steps'), '<ol>' + steps.map((s) => '<li>' + escapeHtml(s) + '</li>').join('') + '</ol>'));
         }
         const details = f.details || f.rule_details || null;
         if (details) {
-            sections.push(section('Details', '<pre>' + escapeHtml(JSON.stringify(details, null, 2)) + '</pre>'));
+            sections.push(section(t('modal.details'), '<pre>' + escapeHtml(JSON.stringify(details, null, 2)) + '</pre>'));
         }
         if (f.suggested_rule) {
-            sections.push(section('Vorschlag (Regel anlegen)',
+            sections.push(section(t('modal.suggestion'),
                 '<pre>' + escapeHtml(JSON.stringify(f.suggested_rule, null, 2)) + '</pre>'
-                + '<button class="btn primary sm" id="apply-suggestion-btn">Regel uebernehmen</button>'
+                + '<button class="btn primary sm" id="apply-suggestion-btn">' + escapeHtml(t('btn.apply_rule')) + '</button>'
                 + '<div class="status-line" id="apply-suggestion-status"></div>'));
         }
         $('modal-body').innerHTML = '<div class="row-flex"><span class="sev-tag sev-' + sev + '">' + escapeHtml(sev) + '</span><span class="spacer"></span></div>' + sections.join('');
@@ -808,13 +901,13 @@
         const btn = $('apply-suggestion-btn');
         if (!status || !btn) return;
         btn.disabled = true;
-        status.textContent = 'Sende...';
+        status.textContent = '...';
         try {
             const data = await apiPost(API.suggestionApply, { finding_id: findingId, confirm: true });
-            if (data.success) status.textContent = 'OK ' + (data.uuid || '');
-            else status.textContent = 'Fehler: ' + (data.error || 'unbekannt');
+            if (data.success) status.textContent = t('toast.connection_ok') + ' ' + (data.uuid || '');
+            else status.textContent = (data.error || 'error');
         } catch (e) {
-            status.textContent = 'Fehler beim Anwenden';
+            status.textContent = t('toast.exception_failed');
         } finally {
             btn.disabled = false;
         }
@@ -825,13 +918,13 @@
         if (!id) return;
         const f = state.findingsById.get(id);
         if (!f) return;
-        const reason = prompt('Grund fuer Ausnahme (optional):') || '';
+        const reason = prompt(t('modal.exclude_prompt')) || '';
         try {
             const data = await apiPost(API.ignoreFinding, { finding: f, reason });
-            if (data.success) { toast('success', 'Ausnahme hinzugefuegt'); closeModal(); loadResults(); }
-            else toast('error', data.error || 'Fehlgeschlagen');
+            if (data.success) { toast('success', t('toast.exception_added')); closeModal(); loadResults(); }
+            else toast('error', data.error || t('toast.exception_failed'));
         } catch (e) {
-            toast('error', 'Fehlgeschlagen');
+            toast('error', t('toast.exception_failed'));
         }
     }
 
@@ -881,9 +974,22 @@
         $('filter-category').addEventListener('change', applyFilter);
         $('filter-search').addEventListener('input', applyFilter);
         $('device-search').addEventListener('input', () => renderDevices(state.devices));
+
+        $$('.lang-btn').forEach((b) => {
+            b.addEventListener('click', () => setLanguage(b.dataset.lang));
+        });
+        const cfgLang = $('cfg-language');
+        if (cfgLang) cfgLang.addEventListener('change', () => setLanguage(cfgLang.value));
     }
 
-    function init() {
+    async function init() {
+        // Language must be ready before any DOM rendering reads strings.
+        state.langPref = readLangPref();
+        state.lang = effectiveLang(state.langPref);
+        await loadTranslations(state.lang);
+        if (state.lang !== 'en') await loadTranslations('en');
+        applyI18n();
+
         bindNav();
         bindEvents();
         loadConfig();
