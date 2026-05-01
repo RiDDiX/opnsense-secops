@@ -1,22 +1,19 @@
-/**
- * OPNsense Security Auditor - Dashboard Controller
- * Real-time security audit with live progress tracking
- */
-(function() {
+// OPNsense Security Auditor dashboard
+(function () {
     'use strict';
 
-    // Wrap fetch so every state-changing request mirrors the CSRF cookie into the header.
+    // CSRF mirror: copy cookie to header for state changing methods
     const _origFetch = window.fetch.bind(window);
-    function _readCookie(name) {
+    function readCookie(name) {
         const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[$()*+?.\\^|]/g, '\\$&') + '=([^;]*)'));
         return m ? decodeURIComponent(m[1]) : '';
     }
-    window.fetch = function(input, init) {
+    window.fetch = function (input, init) {
         init = init || {};
         const method = (init.method || 'GET').toUpperCase();
         if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
             init.headers = Object.assign({}, init.headers || {});
-            const tok = _readCookie('secops_csrf');
+            const tok = readCookie('secops_csrf');
             if (tok) init.headers['X-CSRF-Token'] = tok;
             init.credentials = init.credentials || 'same-origin';
         }
@@ -25,1151 +22,884 @@
 
     const API = {
         config: '/api/config',
-        testConnection: '/api/connection/test',
-        scan: {
-            start: '/api/scan/start',
-            status: '/api/scan/status',
-            cancel: '/api/scan/cancel'
-        },
+        connection: '/api/connection/test',
+        scanStart: '/api/scan/start',
+        scanStatus: '/api/scan/status',
+        scanCancel: '/api/scan/cancel',
         results: '/api/results/latest',
-        rawData: '/api/data/raw',
         history: '/api/reports/history',
         clearHistory: '/api/reports/clear',
         ignoreFinding: '/api/ignore-list/add-finding',
-        internalScan: '/api/scan/internal/status',
-        schedule: '/api/schedule'
+        ignoreList: '/api/ignore-list',
+        ignoreAdd: '/api/ignore-list/add',
+        ignoreRemove: '/api/ignore-list/remove',
+        schedule: '/api/schedule',
+        suggestionApply: '/api/suggestions/apply',
+        networks: '/api/networks/fetch',
+        networksSelected: '/api/config/networks',
+        scanInternalStart: '/api/scan/internal',
+        scanInternalStatus: '/api/scan/internal/status',
+        scanInternalCancel: '/api/scan/internal/cancel',
     };
 
-    let state = {
-        scanning: false,
-        pollInterval: null,
+    const state = {
         results: null,
-        config: null,
-        scanStartTime: null,
-        lastLogIndex: 0,
-        currentFinding: null,
         reportFile: null,
-        lastScanStatus: null
+        findings: [],
+        findingsById: new Map(),
+        devices: [],
+        scanPoll: null,
+        netPoll: null,
+        scanRunning: false,
+        scanStarted: 0,
     };
 
-    // Initialize
-    document.addEventListener('DOMContentLoaded', init);
+    const $ = (id) => document.getElementById(id);
+    const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-    function init() {
-        setupNavigation();
-        setupEventListeners();
-        loadConfig();
-        loadLatestResults();
-        checkScanStatus();
-        loadSchedule();
+    function escapeHtml(s) {
+        const d = document.createElement('div');
+        d.textContent = s == null ? '' : String(s);
+        return d.innerHTML;
+    }
+    function fmtTime(iso) {
+        if (!iso) return '--';
+        try {
+            const d = new Date(iso);
+            return d.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+        } catch (e) { return iso; }
+    }
+    function durationSince(ms) {
+        const sec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+        if (sec < 60) return sec + 's';
+        return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+    }
+    function severityKey(sev) {
+        return (sev || '').toString().toLowerCase();
     }
 
-    // Navigation
-    function setupNavigation() {
-        document.querySelectorAll('.nav-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const view = item.dataset.view;
-                switchView(view);
-            });
+    function toast(level, msg) {
+        const stack = $('toast-stack');
+        if (!stack) return;
+        const el = document.createElement('div');
+        el.className = 'toast ' + level;
+        el.textContent = msg;
+        stack.appendChild(el);
+        setTimeout(() => el.remove(), 5000);
+    }
+
+    async function apiGet(url) {
+        const res = await fetch(url, { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+        return res.json();
+    }
+    async function apiPost(url, body) {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: body == null ? '{}' : JSON.stringify(body),
         });
-
-        document.querySelectorAll('[data-view]').forEach(link => {
-            link.addEventListener('click', (e) => {
-                if (link.tagName === 'A') e.preventDefault();
-                switchView(link.dataset.view);
-            });
-        });
+        if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+        return res.json();
     }
 
-    function switchView(viewName) {
-        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-
-        const navItem = document.querySelector(`[data-view="${viewName}"]`);
-        const view = document.getElementById(`view-${viewName}`);
-
-        if (navItem) navItem.classList.add('active');
-        if (view) view.classList.add('active');
-
-        updateViewTitle(viewName);
-    }
-
-    function updateViewTitle(viewName) {
+    // ---------- view router ----------
+    function setView(name) {
+        $$('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.view === name));
+        $$('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + name));
         const titles = {
-            dashboard: 'Security Dashboard',
-            findings: 'Alle Findings',
-            firewall: 'Firewall Analyse',
-            dns: 'DNS Sicherheit',
-            system: 'System Sicherheit',
-            network: 'Netzwerk-Geräte',
-            config: 'Konfiguration'
+            dashboard: 'Uebersicht',
+            findings: 'Findings',
+            firewall: 'Firewall',
+            dns: 'DNS',
+            system: 'System',
+            network: 'Netzwerk',
+            certs: 'Zertifikate',
+            config: 'Konfiguration',
         };
-        document.getElementById('view-title').textContent = titles[viewName] || viewName;
+        $('view-title').textContent = titles[name] || name;
+        if (name === 'config') {
+            loadIgnoreList();
+            loadNetworksSelected();
+        }
+    }
+    function bindNav() {
+        document.addEventListener('click', (e) => {
+            const item = e.target.closest('[data-view]');
+            if (!item) return;
+            e.preventDefault();
+            setView(item.dataset.view);
+        });
     }
 
-    // Event Listeners
-    function setupEventListeners() {
-        document.getElementById('btn-start-scan').addEventListener('click', startScan);
-        document.getElementById('btn-cancel-scan').addEventListener('click', cancelScan);
-        document.getElementById('btn-refresh').addEventListener('click', () => loadLatestResults());
-        document.getElementById('btn-test-connection').addEventListener('click', testConnection);
-        document.getElementById('btn-save-config').addEventListener('click', saveConfig);
-        document.getElementById('modal-close').addEventListener('click', closeModal);
-        document.querySelector('.modal-backdrop').addEventListener('click', closeModal);
-        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
-
-        // Filters
-        document.getElementById('filter-severity').addEventListener('change', applyFilters);
-        document.getElementById('filter-category').addEventListener('change', applyFilters);
-        document.getElementById('filter-search').addEventListener('input', applyFilters);
-
-        // Download report
-        document.getElementById('btn-download-report').addEventListener('click', downloadReport);
-
-        // Exclude finding from modal
-        document.getElementById('btn-exclude-finding').addEventListener('click', excludeCurrentFinding);
-
-        // Device search
-        const deviceSearch = document.getElementById('device-search');
-        if (deviceSearch) deviceSearch.addEventListener('input', filterDevices);
-
-        // Clear history
-        const btnClear = document.getElementById('btn-clear-history');
-        if (btnClear) btnClear.addEventListener('click', clearHistory);
-
-        // Schedule
-        const btnSchedule = document.getElementById('btn-save-schedule');
-        if (btnSchedule) btnSchedule.addEventListener('click', saveSchedule);
-    }
-
-    // Config Management
+    // ---------- config ----------
     async function loadConfig() {
         try {
-            const res = await fetch(API.config);
-            const data = await res.json();
-            if (data.success && data.opnsense) {
-                state.config = data.opnsense;
-                document.getElementById('cfg-host').value = data.opnsense.host || '';
-                document.getElementById('cfg-apikey').value = data.opnsense.api_key || '';
-                document.getElementById('cfg-apisecret').value = data.opnsense.api_secret || '';
-                document.getElementById('opnsense-host').textContent = data.opnsense.host || 'Nicht konfiguriert';
-                updateConnectionStatus(false);
-            }
-        } catch (err) {
-            console.error('Config load failed:', err);
+            const data = await apiGet(API.config);
+            if (!data.success) return;
+            const cfg = data.opnsense || {};
+            $('cfg-host').value = cfg.host || '';
+            // Server returns masked '***' or empty if unset.
+            $('cfg-apikey').value = cfg.api_key_set ? '***' : '';
+            $('cfg-apisecret').value = cfg.api_secret_set ? '***' : '';
+            $('cfg-insecure-tls').checked = !!cfg.insecure_tls;
+            $('opnsense-host').textContent = cfg.host || '--';
+            updateConnDot(!!cfg.host && cfg.api_key_set);
+        } catch (e) {
+            toast('error', 'Konfiguration konnte nicht geladen werden');
         }
     }
 
     async function saveConfig() {
-        const config = {
-            host: document.getElementById('cfg-host').value,
-            api_key: document.getElementById('cfg-apikey').value,
-            api_secret: document.getElementById('cfg-apisecret').value
+        const cfg = {
+            host: $('cfg-host').value.trim(),
+            api_key: $('cfg-apikey').value === '***' ? '' : $('cfg-apikey').value,
+            api_secret: $('cfg-apisecret').value === '***' ? '' : $('cfg-apisecret').value,
+            insecure_tls: $('cfg-insecure-tls').checked,
         };
-
         try {
-            const res = await fetch(API.config, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ opnsense: config })
-            });
-            const data = await res.json();
+            const data = await apiPost(API.config, { opnsense: cfg });
             if (data.success) {
-                showConnectionResult('Konfiguration gespeichert', 'success');
-                state.config = config;
-                document.getElementById('opnsense-host').textContent = config.host;
+                toast('success', 'Konfiguration gespeichert');
+                loadConfig();
             } else {
-                showConnectionResult(data.error || 'Speichern fehlgeschlagen', 'error');
+                toast('error', data.error || 'Speichern fehlgeschlagen');
             }
-        } catch (err) {
-            showConnectionResult('Netzwerkfehler: ' + err.message, 'error');
+        } catch (e) {
+            toast('error', 'Speichern fehlgeschlagen');
         }
     }
 
     async function testConnection() {
-        const btn = document.getElementById('btn-test-connection');
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Teste...';
-
-        const config = {
-            host: document.getElementById('cfg-host').value,
-            api_key: document.getElementById('cfg-apikey').value,
-            api_secret: document.getElementById('cfg-apisecret').value
-        };
-
+        const out = $('connection-result');
+        out.classList.remove('hidden', 'ok', 'err');
+        out.textContent = 'Teste...';
         try {
-            const res = await fetch(API.testConnection, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
-            });
-            const data = await res.json();
+            const body = {
+                host: $('cfg-host').value.trim(),
+                api_key: $('cfg-apikey').value === '***' ? '' : $('cfg-apikey').value,
+                api_secret: $('cfg-apisecret').value === '***' ? '' : $('cfg-apisecret').value,
+                insecure_tls: $('cfg-insecure-tls').checked,
+            };
+            const data = await apiPost(API.connection, body);
             if (data.success) {
-                showConnectionResult(`Verbunden! OPNsense ${data.version || ''}`, 'success');
-                updateConnectionStatus(true);
+                out.classList.add('ok');
+                out.textContent = 'OK ' + (data.version ? 'OPNsense ' + data.version : '');
+                updateConnDot(true);
             } else {
-                showConnectionResult(data.error || 'Verbindung fehlgeschlagen', 'error');
-                updateConnectionStatus(false);
+                out.classList.add('err');
+                out.textContent = data.error || 'Verbindung fehlgeschlagen';
+                updateConnDot(false);
             }
-        } catch (err) {
-            showConnectionResult('Netzwerkfehler: ' + err.message, 'error');
-            updateConnectionStatus(false);
-        } finally {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-plug"></i> Verbindung testen';
+        } catch (e) {
+            out.classList.add('err');
+            out.textContent = 'Verbindung fehlgeschlagen';
+            updateConnDot(false);
         }
     }
 
-    function showConnectionResult(msg, type) {
-        const el = document.getElementById('connection-result');
-        el.textContent = msg;
-        el.className = 'connection-result ' + type;
-        el.classList.remove('hidden');
-    }
-
-    function updateConnectionStatus(online) {
-        const el = document.getElementById('connection-status');
-        const dot = el.querySelector('.status-dot');
-        const text = el.querySelector('span:last-child');
+    function updateConnDot(online) {
+        const wrap = $('connection-status');
+        if (!wrap) return;
+        const dot = wrap.querySelector('.dot');
+        const txt = wrap.querySelector('.conn-text');
         if (online) {
-            dot.classList.add('online');
-            text.textContent = 'Verbunden';
+            dot.classList.remove('offline'); dot.classList.add('online');
+            txt.textContent = 'verbunden';
         } else {
-            dot.classList.remove('online');
-            text.textContent = 'Nicht verbunden';
+            dot.classList.remove('online'); dot.classList.add('offline');
+            txt.textContent = 'offline';
         }
     }
 
-    // Scan Management
+    // ---------- scan ----------
     async function startScan() {
-        if (state.scanning) return;
-
-        state.scanning = true;
-        state.scanStartTime = Date.now();
-        state.lastLogIndex = 0;
-        showScanPanel();
-        clearScanLog();
-        addScanLog('info', 'Security Scan wird gestartet...');
-
         try {
-            const res = await fetch(API.scan.start, { method: 'POST' });
-            const data = await res.json();
-            if (data.success) {
-                addScanLog('success', 'Scan erfolgreich gestartet');
-                startScanPolling();
-            } else {
-                addScanLog('error', 'Start fehlgeschlagen: ' + (data.error || 'Unbekannter Fehler'));
-                hideScanPanel();
-                state.scanning = false;
+            const data = await apiPost(API.scanStart);
+            if (!data.success) {
+                toast('error', data.error || 'Scan konnte nicht gestartet werden');
+                return;
             }
-        } catch (err) {
-            addScanLog('error', 'Netzwerkfehler: ' + err.message);
-            hideScanPanel();
-            state.scanning = false;
+            state.scanRunning = true;
+            state.scanStarted = Date.now();
+            showScanPanel();
+            startScanPolling();
+        } catch (e) {
+            toast('error', 'Scan-Start fehlgeschlagen');
         }
     }
 
     async function cancelScan() {
-        try {
-            await fetch(API.scan.cancel, { method: 'POST' });
-            addScanLog('warning', 'Scan wird abgebrochen...');
-        } catch (err) {
-            console.error('Cancel failed:', err);
-        }
-    }
-
-    function startScanPolling() {
-        if (state.pollInterval) clearInterval(state.pollInterval);
-        state.pollInterval = setInterval(pollScanStatus, 500);
-    }
-
-    function stopScanPolling() {
-        if (state.pollInterval) {
-            clearInterval(state.pollInterval);
-            state.pollInterval = null;
-        }
-    }
-
-    async function pollScanStatus() {
-        try {
-            const res = await fetch(API.scan.status);
-            const data = await res.json();
-
-            updateScanProgress(data);
-
-            // Process new log entries since last poll
-            if (data.logs && data.logs.length > state.lastLogIndex) {
-                const newLogs = data.logs.slice(state.lastLogIndex);
-                newLogs.forEach(log => addScanLogEntry(log));
-                state.lastLogIndex = data.logs.length;
-            }
-
-            if (data.status === 'completed') {
-                stopScanPolling();
-                state.scanning = false;
-                addScanLog('success', 'Scan abgeschlossen!');
-                showNotification('Scan abgeschlossen', 'Security-Scan wurde erfolgreich beendet.', 'success');
-                loadLatestResults();
-                setTimeout(() => {
-                    hideScanPanel();
-                }, 3000);
-            } else if (data.status === 'failed' || data.status === 'cancelled') {
-                stopScanPolling();
-                state.scanning = false;
-                addScanLog('error', data.error || 'Scan abgebrochen');
-                showNotification('Scan fehlgeschlagen', data.error || 'Scan wurde abgebrochen.', 'error');
-                setTimeout(hideScanPanel, 2000);
-            }
-        } catch (err) {
-            console.error('Poll failed:', err);
-        }
-    }
-
-    async function checkScanStatus() {
-        try {
-            const res = await fetch(API.scan.status);
-            const data = await res.json();
-            if (data.status === 'running') {
-                state.scanning = true;
-                state.scanStartTime = Date.now();
-                showScanPanel();
-                startScanPolling();
-            }
-        } catch (err) {
-            console.error('Status check failed:', err);
-        }
-    }
-
-    function updateScanProgress(data) {
-        const progress = data.progress || 0;
-        document.getElementById('scan-progress-fill').style.width = progress + '%';
-        document.getElementById('scan-progress-text').textContent = progress + '%';
-        
-        const currentCheck = document.getElementById('scan-current-check');
-        currentCheck.innerHTML = `<i class="fas fa-circle-notch fa-spin"></i> <span>${escapeHtml(data.current_step || 'Verarbeite...')}</span>`;
-
-        // Update stats
-        if (data.rules_checked !== undefined) {
-            document.getElementById('stat-rules-checked').textContent = data.rules_checked;
-        }
-        if (data.findings_count !== undefined) {
-            document.getElementById('stat-findings').textContent = data.findings_count;
-        }
-
-        // Update duration
-        if (state.scanStartTime) {
-            const duration = Math.floor((Date.now() - state.scanStartTime) / 1000);
-            document.getElementById('stat-duration').textContent = duration + 's';
-        }
+        try { await apiPost(API.scanCancel); } catch (e) { /* ignore */ }
     }
 
     function showScanPanel() {
-        document.getElementById('scan-panel').classList.remove('hidden');
-        document.getElementById('btn-start-scan').disabled = true;
+        $('scan-panel').classList.remove('hidden');
+        $('btn-start-scan').disabled = true;
+        $('scan-log').textContent = '';
     }
-
     function hideScanPanel() {
-        document.getElementById('scan-panel').classList.add('hidden');
-        document.getElementById('btn-start-scan').disabled = false;
+        $('scan-panel').classList.add('hidden');
+        $('btn-start-scan').disabled = false;
     }
 
-    function clearScanLog() {
-        document.getElementById('scan-log').innerHTML = '';
+    function startScanPolling() {
+        stopScanPolling();
+        state.scanPoll = setInterval(pollScan, 1500);
+        pollScan();
+    }
+    function stopScanPolling() {
+        if (state.scanPoll) { clearInterval(state.scanPoll); state.scanPoll = null; }
     }
 
-    function addScanLog(level, message) {
-        const time = new Date().toLocaleTimeString('de-DE');
-        addScanLogEntry({ timestamp: time, level, message });
-    }
-
-    function addScanLogEntry(log) {
-        const logEl = document.getElementById('scan-log');
-        const entry = document.createElement('div');
-        entry.className = 'log-entry ' + log.level;
-        entry.dataset.logId = `${log.timestamp}-${log.message.substring(0,20)}`;
-        entry.innerHTML = `
-            <span class="log-time">${log.timestamp}</span>
-            <span class="log-msg">${escapeHtml(log.message)}</span>
-        `;
-        logEl.appendChild(entry);
-        logEl.scrollTop = logEl.scrollHeight;
-    }
-
-    // Results
-    async function loadLatestResults() {
+    async function pollScan() {
         try {
-            const res = await fetch(API.results);
-            const data = await res.json();
-            if (data.success && data.results) {
-                state.results = data.results;
-                state.reportFile = data.report_file || null;
-                renderDashboard(data.results);
-                renderFindings(data.results);
-                renderFirewallView(data.results);
-                renderDnsView(data.results);
-                renderSystemView(data.results);
-                renderNetworkDevices(data.results);
-                updateConnectionStatus(true);
-                loadScanHistory();
-                // Show download button if we have results
-                const dlBtn = document.getElementById('btn-download-report');
-                if (dlBtn) dlBtn.style.display = state.reportFile ? '' : 'none';
+            const data = await apiGet(API.scanStatus);
+            if (!data.success) return;
+            applyScanStatus(data);
+            const done = ['completed', 'failed', 'cancelled', 'idle'].includes(data.status);
+            if (done) {
+                stopScanPolling();
+                state.scanRunning = false;
+                hideScanPanel();
+                if (data.status === 'completed') toast('success', 'Scan abgeschlossen');
+                else if (data.status === 'failed') toast('error', 'Scan fehlgeschlagen');
+                else if (data.status === 'cancelled') toast('warning', 'Scan abgebrochen');
+                loadResults();
+                loadHistory();
             }
-        } catch (err) {
-            console.error('Load results failed:', err);
+        } catch (e) { /* keep polling */ }
+    }
+
+    function applyScanStatus(data) {
+        const pct = Math.max(0, Math.min(100, parseInt(data.progress || 0, 10)));
+        $('scan-progress-fill').style.width = pct + '%';
+        $('scan-progress-text').textContent = pct + '%';
+        $('scan-current-check').textContent = data.current_step || '';
+        $('stat-rules-checked').textContent = data.rules_checked ?? 0;
+        $('stat-findings').textContent = data.findings_count ?? 0;
+        $('stat-duration').textContent = state.scanStarted ? durationSince(state.scanStarted) : '0s';
+        renderLogs($('scan-log'), data.logs || []);
+    }
+
+    function renderLogs(container, logs) {
+        container.innerHTML = logs.map((l) => {
+            const lvl = (l.level || 'info').toLowerCase();
+            return '<div class="log-entry ' + escapeHtml(lvl) + '">'
+                 + '<span class="ts">' + escapeHtml(l.timestamp || '') + '</span>'
+                 + '<span class="lvl">' + escapeHtml(lvl) + '</span>'
+                 + '<span class="msg">' + escapeHtml(l.message || '') + '</span>'
+                 + '</div>';
+        }).join('');
+        container.scrollTop = container.scrollHeight;
+    }
+
+    // ---------- results / dashboard ----------
+    async function loadResults() {
+        try {
+            const data = await apiGet(API.results);
+            if (!data.success) {
+                $('top-findings-list').innerHTML = '<p class="empty">Noch kein Scan ausgefuehrt.</p>';
+                return;
+            }
+            state.results = data.results || {};
+            state.reportFile = data.report_file || null;
+            const findings = collectFindings(state.results);
+            state.findings = findings;
+            state.findingsById = new Map(findings.map((f) => [f.rule_id || f.check || f.cve_id || randomId(), f]));
+            renderDashboard();
+            renderFindings();
+            renderFirewall();
+            renderDns();
+            renderSystem();
+            renderCerts();
+            renderDevices(state.results.devices || []);
+            $('btn-download-report').classList.toggle('hidden', !state.reportFile);
+            $('opnsense-host').textContent = state.results.opnsense_host || '--';
+        } catch (e) {
+            // 404 first run is fine
         }
     }
 
-    function renderDashboard(results) {
-        // Security Score
-        const score = results.security_score || 0;
-        const grade = results.security_grade || '--';
-        
-        document.getElementById('security-score').textContent = score;
-        document.getElementById('security-grade').textContent = grade;
-        
-        // Animate score ring
-        const circle = document.getElementById('score-circle');
-        const circumference = 2 * Math.PI * 45;
-        const offset = circumference - (score / 100) * circumference;
-        circle.style.strokeDashoffset = offset;
+    function randomId() { return 'tmp_' + Math.random().toString(36).slice(2, 10); }
 
-        // Set color based on score
-        let color = '#ff6b6b';
-        if (score >= 80) color = '#69db7c';
-        else if (score >= 60) color = '#ffd43b';
-        else if (score >= 40) color = '#ffa94d';
-        circle.style.stroke = color;
-        document.getElementById('security-grade').style.color = color;
-
-        // Category Scores
-        const catScores = results.category_scores || {};
-        setBreakdownScore('firewall', catScores.firewall || 0);
-        setBreakdownScore('dns', catScores.dns || 0);
-        setBreakdownScore('system', catScores.system || 0);
-        setBreakdownScore('vpn', catScores.vpn || 0);
-
-        // Severity counts
-        const counts = countSeverities(results);
-        document.getElementById('count-critical').textContent = counts.critical;
-        document.getElementById('count-high').textContent = counts.high;
-        document.getElementById('count-medium').textContent = counts.medium;
-        document.getElementById('count-low').textContent = counts.low;
-
-        // Stats
-        document.getElementById('stat-fw-rules').textContent = results.statistics?.firewall_rules || '--';
-        document.getElementById('stat-nat-rules').textContent = results.statistics?.nat_rules || '--';
-        document.getElementById('stat-interfaces').textContent = results.statistics?.interfaces || '--';
-        document.getElementById('stat-last-scan').textContent = formatTimestamp(results.scan_timestamp);
-
-        // Top findings
-        renderTopFindings(results);
-    }
-
-    function setBreakdownScore(category, score) {
-        const bar = document.getElementById(`score-${category}`);
-        const val = document.getElementById(`score-${category}-val`);
-        if (bar) {
-            bar.style.width = score + '%';
-            let color = '#ff6b6b';
-            if (score >= 80) color = '#69db7c';
-            else if (score >= 60) color = '#ffd43b';
-            else if (score >= 40) color = '#ffa94d';
-            bar.style.background = color;
-        }
-        if (val) val.textContent = score + '%';
-    }
-
-    function countSeverities(results) {
-        const counts = { critical: 0, high: 0, medium: 0, low: 0 };
-        const allFindings = getAllFindings(results);
-        allFindings.forEach(f => {
-            const sev = (f.severity || '').toLowerCase();
-            if (counts[sev] !== undefined) counts[sev]++;
-        });
-        return counts;
-    }
-
-    function getAllFindings(results) {
-        return [
-            ...(results.firewall_findings || []),
-            ...(results.port_findings || []),
-            ...(results.dns_findings || []),
-            ...(results.system_findings || []),
-            ...(results.vulnerability_findings || []),
-            ...(results.vlan_findings || []),
-            ...(results.ipv6_findings || []),
-            ...(results.gateway_findings || []),
-            ...(results.radvd_findings || [])
+    function collectFindings(r) {
+        const buckets = [
+            ['firewall', r.firewall_findings],
+            ['dns', r.dns_findings],
+            ['system', r.system_findings],
+            ['vlan', r.vlan_findings],
+            ['ipv6', r.ipv6_findings],
+            ['gateway', r.gateway_findings],
+            ['radvd', r.radvd_findings],
+            ['port', r.port_findings],
+            ['vulnerability', r.vulnerability_findings],
+            ['certificate', r.certificate_findings],
         ];
+        const out = [];
+        for (const [cat, list] of buckets) {
+            if (!Array.isArray(list)) continue;
+            for (const f of list) {
+                out.push(Object.assign({}, f, { _category: cat }));
+            }
+        }
+        return out;
     }
 
-    function renderTopFindings(results) {
-        const container = document.getElementById('top-findings-list');
-        const allFindings = sortBySeverity(getAllFindings(results))
-            .filter(f => ['critical', 'high'].includes((f.severity || '').toLowerCase()))
-            .slice(0, 5);
+    function renderDashboard() {
+        const r = state.results || {};
+        const sum = r.summary || {};
+        $('count-critical').textContent = sum.critical || 0;
+        $('count-high').textContent = sum.high || 0;
+        $('count-medium').textContent = sum.medium || 0;
+        $('count-low').textContent = sum.low || 0;
+        const stats = r.statistics || {};
+        $('stat-fw-rules').textContent = stats.firewall_rules ?? '--';
+        $('stat-nat-rules').textContent = stats.nat_rules ?? '--';
+        $('stat-interfaces').textContent = stats.interfaces ?? '--';
+        $('stat-last-scan').textContent = fmtTime(r.scan_timestamp);
 
-        if (allFindings.length === 0) {
-            container.innerHTML = `
-                <div class="no-data">
-                    <i class="fas fa-check-circle"></i>
-                    <p>Keine kritischen Findings</p>
-                </div>
-            `;
-            return;
+        const score = parseInt(r.security_score || 0, 10);
+        $('security-score').textContent = isNaN(score) ? '--' : score;
+        $('security-grade').textContent = r.security_grade || '--';
+        const circ = 282.7;
+        const offset = circ - (circ * Math.max(0, Math.min(100, score)) / 100);
+        const ring = $('score-circle');
+        ring.style.strokeDashoffset = offset;
+        ring.style.stroke = scoreColor(score);
+
+        const cats = r.category_scores || {};
+        for (const k of ['firewall', 'dns', 'system', 'vpn']) {
+            const pct = typeof cats[k] === 'number' ? cats[k] : null;
+            const fill = $('score-' + k);
+            const val = $('score-' + k + '-val');
+            if (pct == null) {
+                if (fill) fill.style.width = '0%';
+                if (val) val.textContent = '--';
+            } else {
+                if (fill) {
+                    fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+                    fill.style.background = scoreColor(pct);
+                }
+                if (val) val.textContent = pct;
+            }
         }
 
-        container.innerHTML = allFindings.map((f, i) => renderFindingItem(f, 'top_' + i)).join('');
-        attachFindingListeners(container);
+        renderTopFindings();
     }
 
-    function sortBySeverity(findings) {
-        const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-        return [...findings].sort((a, b) => {
-            return (severityOrder[(a.severity || '').toLowerCase()] || 4) - 
-                   (severityOrder[(b.severity || '').toLowerCase()] || 4);
-        });
+    function scoreColor(s) {
+        if (s >= 90) return getCss('--ok');
+        if (s >= 70) return getCss('--warn');
+        if (s >= 0) return getCss('--err');
+        return getCss('--accent');
+    }
+    function getCss(name) {
+        return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
     }
 
-    function renderFindings(results) {
-        const container = document.getElementById('all-findings-list');
-        const allFindings = sortBySeverity(getAllFindings(results));
-
-        if (allFindings.length === 0) {
-            container.innerHTML = `
-                <div class="no-data">
-                    <i class="fas fa-search"></i>
-                    <p>Keine Findings vorhanden</p>
-                </div>
-            `;
+    function renderTopFindings() {
+        const top = state.findings
+            .filter((f) => ['CRITICAL', 'HIGH'].includes(severityKey(f.severity).toUpperCase()))
+            .slice(0, 6);
+        const c = $('top-findings-list');
+        if (!top.length) {
+            c.innerHTML = '<p class="empty">Keine kritischen Findings.</p>';
             return;
         }
-
-        container.innerHTML = allFindings.map((f, i) => renderFindingItem(f, 'all_' + i)).join('');
-        attachFindingListeners(container);
+        c.innerHTML = top.map(rowHtml).join('');
     }
 
-    function renderFindingItem(finding, key) {
-        const severity = (finding.severity || 'low').toLowerCase();
-        const title = finding.issue || finding.check || 'Unbekanntes Finding';
-        const desc = finding.reason || finding.description || '';
-        const path = finding.opnsense_path || '';
-
-        // Store finding in global map, keyed by unique ID
-        if (!window._findingsMap) window._findingsMap = {};
-        window._findingsMap[key] = finding;
-
-        return `
-            <div class="finding-item ${severity}" data-finding-key="${key}">
-                <div class="finding-severity-bar"></div>
-                <span class="finding-badge">${severity}</span>
-                <div class="finding-content">
-                    <h4>${escapeHtml(title)}</h4>
-                    <p>${escapeHtml(desc.substring(0, 120))}${desc.length > 120 ? '...' : ''}</p>
-                    ${path ? `<div class="finding-path"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(path)}</div>` : ''}
-                </div>
-                <div class="finding-arrow"><i class="fas fa-chevron-right"></i></div>
-            </div>
-        `;
+    function rowHtml(f) {
+        const sev = severityKey(f.severity || 'low');
+        const id = f.rule_id || f.check || f.cve_id || '';
+        const issue = f.issue || f.title || f.check || 'Finding';
+        const cat = f._category || f.category || '';
+        return '<div class="finding-row" data-finding-id="' + escapeHtml(id) + '">'
+             + '<span class="sev-tag sev-' + sev + '">' + escapeHtml(sev) + '</span>'
+             + '<div class="finding-main">'
+             + '<div class="finding-issue">' + escapeHtml(issue) + '</div>'
+             + '<div class="finding-meta">'
+             + (cat ? '<span class="cat">' + escapeHtml(cat) + '</span>' : '')
+             + (f.opnsense_path ? '<span>' + escapeHtml(f.opnsense_path) + '</span>' : '')
+             + '</div>'
+             + '</div>'
+             + '<div class="finding-aside">' + escapeHtml(id.slice(0, 12)) + '</div>'
+             + '</div>';
     }
 
-    function getCategory(finding) {
-        if (finding.rule_id || finding.rule_description) return 'Firewall';
-        if (finding.wan_exposed || finding.details?.wan_exposed) return 'Firewall';
-        if (finding.check?.includes('dns') || finding.check?.includes('unbound')) return 'DNS';
-        if (finding.check?.includes('ssh') || finding.check?.includes('webgui') || finding.check?.includes('ids')) return 'System';
-        if (finding.category?.toLowerCase().includes('vpn') || finding.check?.includes('vpn') || finding.check?.includes('wg_')) return 'VPN';
-        if (finding.vlan_id !== undefined) return 'VLAN';
-        if (finding.cve_id) return 'Vulnerability';
-        return 'System';
+    // ---------- findings list ----------
+    function renderFindings() {
+        applyFilter();
     }
 
-    function attachFindingListeners(container) {
-        container.querySelectorAll('.finding-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const key = item.dataset.findingKey;
-                const finding = window._findingsMap && window._findingsMap[key];
-                if (finding) showFindingDetail(finding);
-            });
+    function applyFilter() {
+        const sevSel = $('filter-severity').value;
+        const catSel = $('filter-category').value;
+        const q = $('filter-search').value.trim().toLowerCase();
+        const filtered = state.findings.filter((f) => {
+            const sev = severityKey(f.severity);
+            if (sevSel !== 'all' && sev !== sevSel) return false;
+            if (catSel !== 'all' && (f._category || '') !== catSel) return false;
+            if (q) {
+                const hay = [
+                    f.issue, f.title, f.check, f.reason, f.description,
+                    f.solution, f.opnsense_path, f.rule_id, f.cve_id,
+                ].map((x) => (x || '').toString().toLowerCase()).join(' ');
+                if (!hay.includes(q)) return false;
+            }
+            return true;
         });
+        const c = $('all-findings-list');
+        if (!filtered.length) {
+            c.innerHTML = '<p class="empty">Keine Findings entsprechen dem Filter.</p>';
+        } else {
+            c.innerHTML = filtered.map(rowHtml).join('');
+        }
+        $('filter-count').textContent = filtered.length + ' Treffer';
     }
 
-    function showFindingDetail(finding) {
-        state.currentFinding = finding;
-        const modal = document.getElementById('finding-modal');
-        const title = document.getElementById('modal-title');
-        const body = document.getElementById('modal-body');
+    // ---------- firewall view ----------
+    function renderFirewall() {
+        const fw = (state.results || {}).firewall_findings || [];
+        const stats = (state.results || {}).statistics || {};
+        $('fw-total-rules').textContent = stats.firewall_rules ?? '--';
+        $('fw-problem-rules').textContent = fw.length;
+        $('fw-any-rules').textContent = fw.filter((f) => /any/i.test(f.issue || '')).length;
+        const c = $('fw-rules-list');
+        c.innerHTML = fw.length
+            ? fw.map((f) => Object.assign({}, f, { _category: 'firewall' })).map(rowHtml).join('')
+            : '<p class="empty">Keine Firewall-Findings.</p>';
+    }
 
-        const severity = (finding.severity || 'low').toLowerCase();
-        title.innerHTML = `<span class="finding-badge ${severity}" style="margin-right:10px">${severity.toUpperCase()}</span> ${escapeHtml(finding.issue || finding.check || 'Finding')}`;
+    // ---------- dns view ----------
+    function renderDns() {
+        const r = state.results || {};
+        const dnsCfg = (r.dns_config || {}).unbound || {};
+        $('dns-dnssec').textContent = truthLabel(dnsCfg.dnssec);
+        $('dns-dot').textContent = truthLabel(dnsCfg.dot);
+        $('dns-rebind').textContent = truthLabel(dnsCfg.private_domain);
+        const servers = dnsCfg.forwarders || (r.dns_config || {}).forward_servers || [];
+        const c = $('dns-servers-list');
+        if (!servers.length) {
+            c.innerHTML = '<p class="empty">Keine Forwarder konfiguriert.</p>';
+        } else {
+            c.innerHTML = servers.map((s) =>
+                '<div class="ignore-row">'
+                + '<span class="mono">' + escapeHtml(s.ip || '') + ':' + escapeHtml(s.port || '53') + (s.dot ? ' (DoT)' : '') + '</span>'
+                + '<span class="reason">' + escapeHtml(s.domain || '') + '</span>'
+                + '</div>'
+            ).join('');
+        }
+    }
+    function truthLabel(v) {
+        const s = (v == null ? '' : String(v)).toLowerCase();
+        return ['1', 'true', 'yes', 'on', 'enabled'].includes(s) ? 'aktiv' : 'inaktiv';
+    }
 
-        body.innerHTML = `
-            ${finding.opnsense_path ? `
-                <div class="detail-path">
-                    <i class="fas fa-directions"></i> ${escapeHtml(finding.opnsense_path)}
-                </div>
-            ` : ''}
+    // ---------- system view ----------
+    function renderSystem() {
+        const sys = (state.results || {}).system_findings || [];
+        const c = $('system-checks');
+        c.innerHTML = sys.length
+            ? sys.map((f) => Object.assign({}, f, { _category: 'system' })).map(rowHtml).join('')
+            : '<p class="empty">Keine System-Findings.</p>';
+    }
 
-            ${(finding.current_value || finding.recommended_value) ? `
-                <div class="detail-comparison">
-                    ${finding.current_value ? `
-                        <div class="compare-box current">
-                            <div class="compare-label"><i class="fas fa-times-circle"></i> Aktueller Wert</div>
-                            <div class="compare-value">${escapeHtml(finding.current_value)}</div>
-                        </div>
-                    ` : ''}
-                    ${finding.recommended_value ? `
-                        <div class="compare-box recommended">
-                            <div class="compare-label"><i class="fas fa-check-circle"></i> Empfohlen</div>
-                            <div class="compare-value">${escapeHtml(finding.recommended_value)}</div>
-                        </div>
-                    ` : ''}
-                </div>
-            ` : ''}
-            
-            <div class="detail-section">
-                <h4>Problem</h4>
-                <p>${escapeHtml(finding.reason || finding.description || 'Keine Details verfügbar')}</p>
-            </div>
-            
-            <div class="detail-section">
-                <h4>Lösung</h4>
-                <p>${escapeHtml(finding.solution || 'Keine Lösung angegeben')}</p>
-            </div>
-            
-            ${finding.implementation_steps ? `
-                <div class="detail-section">
-                    <h4>Umsetzung</h4>
-                    <ol style="margin-left:20px; line-height:1.8">
-                        ${finding.implementation_steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
-                    </ol>
-                </div>
-            ` : ''}
-            
-            ${finding.details || finding.rule_details ? `
-                <div class="detail-section">
-                    <h4>Technische Details</h4>
-                    <pre>${escapeHtml(JSON.stringify(finding.details || finding.rule_details, null, 2))}</pre>
-                </div>
-            ` : ''}
+    // ---------- certs view ----------
+    function renderCerts() {
+        const list = (state.results || {}).certificate_findings || [];
+        const c = $('cert-list');
+        c.innerHTML = list.length
+            ? list.map((f) => Object.assign({}, f, { _category: 'certificate' })).map(rowHtml).join('')
+            : '<p class="empty">Keine Zertifikat-Findings.</p>';
+    }
 
-            ${finding.suggested_rule ? `
-                <div class="detail-section">
-                    <h4>Vorgeschlagene Regel</h4>
-                    <pre id="suggestion-payload">${escapeHtml(JSON.stringify(finding.suggested_rule, null, 2))}</pre>
-                    <div style="margin-top:10px; display:flex; gap:8px; align-items:center">
-                        <button id="apply-suggestion-btn" class="btn-action" data-finding-id="${escapeHtml(finding.rule_id || '')}">
-                            <i class="fas fa-bolt"></i> Regel direkt anwenden
-                        </button>
-                        <span id="apply-suggestion-status" style="font-size:0.9em; color:#888"></span>
-                    </div>
-                </div>
-            ` : ''}
-        `;
+    // ---------- devices ----------
+    function renderDevices(devices) {
+        state.devices = devices || [];
+        const tbody = $('devices-tbody');
+        const stats = (state.results || {}).statistics || {};
+        $('stat-total-devices').textContent = stats.total_devices ?? state.devices.length;
+        $('stat-total-open-ports').textContent = stats.total_open_ports ?? state.devices.reduce((a, d) => a + ((d.open_ports || []).length), 0);
+        $('stat-total-networks').textContent = Object.keys(stats.devices_by_network || {}).length || '--';
+        if (!state.devices.length) {
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">Noch keine Geraete erfasst.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = filteredDevices().map(deviceRow).join('');
+    }
+    function filteredDevices() {
+        const q = ($('device-search').value || '').toLowerCase().trim();
+        if (!q) return state.devices;
+        return state.devices.filter((d) =>
+            (d.ip || '').toLowerCase().includes(q) ||
+            (d.hostname || '').toLowerCase().includes(q) ||
+            (d.mac || '').toLowerCase().includes(q)
+        );
+    }
+    function deviceRow(d) {
+        const status = d.status === 'active' ? '<span class="s-on">on</span>' : '<span class="s-off">off</span>';
+        const ports = (d.open_ports || []).slice(0, 12)
+            .map((p) => '<span class="port-tag">' + escapeHtml(String(p)) + '</span>').join('');
+        return '<tr>'
+             + '<td>' + status + '</td>'
+             + '<td class="mono">' + escapeHtml(d.ip || '') + '</td>'
+             + '<td>' + escapeHtml(d.hostname || '--') + '</td>'
+             + '<td class="mono">' + escapeHtml(d.mac || '--') + '</td>'
+             + '<td class="mono">' + escapeHtml(d.network || '') + '</td>'
+             + '<td class="mono">' + escapeHtml(d.vlan || '') + '</td>'
+             + '<td>' + ports + '</td>'
+             + '</tr>';
+    }
 
-        modal.classList.remove('hidden');
+    // ---------- internal scan ----------
+    async function startInternalScan() {
+        try {
+            const data = await apiPost(API.scanInternalStart, {});
+            if (!data.success) { toast('error', data.error || 'Konnte nicht gestartet werden'); return; }
+            $('net-scan-panel').classList.remove('hidden');
+            $('btn-network-scan').classList.add('hidden');
+            $('btn-network-scan-cancel').classList.remove('hidden');
+            startNetPolling();
+        } catch (e) {
+            toast('error', 'Internal-Scan fehlgeschlagen');
+        }
+    }
+    async function cancelInternalScan() {
+        try { await apiPost(API.scanInternalCancel, {}); } catch (e) { /* ignore */ }
+    }
+    function startNetPolling() {
+        stopNetPolling();
+        state.netPoll = setInterval(pollNet, 2000);
+        pollNet();
+    }
+    function stopNetPolling() {
+        if (state.netPoll) { clearInterval(state.netPoll); state.netPoll = null; }
+    }
+    async function pollNet() {
+        try {
+            const data = await apiGet(API.scanInternalStatus);
+            if (!data.success) return;
+            const total = parseInt(data.total_hosts || 0, 10);
+            const done = parseInt(data.scanned_hosts || 0, 10);
+            const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+            $('net-scan-fill').style.width = pct + '%';
+            $('net-scan-step').textContent = (data.current_step || '') + (total > 0 ? ' (' + done + '/' + total + ')' : '');
+            renderLogs($('net-scan-log'), data.logs || []);
+            if (Array.isArray(data.devices)) renderDevices(data.devices);
+            const finished = ['completed', 'failed', 'cancelled', 'idle'].includes(data.status);
+            if (finished) {
+                stopNetPolling();
+                $('btn-network-scan').classList.remove('hidden');
+                $('btn-network-scan-cancel').classList.add('hidden');
+                if (data.status === 'completed') toast('success', 'Interner Scan fertig');
+                else if (data.status === 'failed') toast('error', 'Interner Scan fehlgeschlagen');
+                else if (data.status === 'cancelled') toast('warning', 'Interner Scan abgebrochen');
+            }
+        } catch (e) { /* keep polling */ }
+    }
 
-        const btn = document.getElementById('apply-suggestion-btn');
-        if (btn) btn.addEventListener('click', () => applySuggestion(btn.dataset.findingId));
+    // ---------- networks selection ----------
+    async function loadNetworksSelected() {
+        try {
+            const data = await apiGet(API.networksSelected);
+            const list = $('networks-list');
+            const networks = (data.networks || []);
+            if (!networks.length) {
+                list.innerHTML = '<p class="empty">Noch keine Netze ausgewaehlt. Aus OPNsense laden.</p>';
+                return;
+            }
+            list.innerHTML = networks.map((n) =>
+                '<div class="network-row">'
+                + '<label class="checkbox"><input type="checkbox" data-cidr="' + escapeHtml(n.network || '') + '"' + (n.enabled !== false ? ' checked' : '') + '> ' + escapeHtml(n.name || n.network || '') + '</label>'
+                + '<span class="cidr">' + escapeHtml(n.network || '') + '</span>'
+                + '</div>'
+            ).join('');
+        } catch (e) { /* ignore */ }
+    }
+    async function fetchNetworks() {
+        try {
+            const data = await apiGet(API.networks);
+            if (!data.success) { toast('error', data.error || 'Konnte Netze nicht laden'); return; }
+            const list = $('networks-list');
+            const nets = data.networks || [];
+            if (!nets.length) {
+                list.innerHTML = '<p class="empty">Keine Netze gefunden.</p>';
+                return;
+            }
+            list.innerHTML = nets.map((n) =>
+                '<div class="network-row">'
+                + '<label class="checkbox"><input type="checkbox" data-cidr="' + escapeHtml(n.network || '') + '" data-name="' + escapeHtml(n.name || '') + '" checked> ' + escapeHtml(n.name || n.network || '') + '</label>'
+                + '<span class="cidr">' + escapeHtml(n.network || '') + '</span>'
+                + '</div>'
+            ).join('');
+            toast('success', nets.length + ' Netze geladen');
+        } catch (e) {
+            toast('error', 'Konnte Netze nicht laden');
+        }
+    }
+    async function saveNetworks() {
+        const rows = $$('#networks-list input[type="checkbox"]');
+        const selected = rows.map((r) => ({
+            network: r.dataset.cidr || '',
+            name: r.dataset.name || '',
+            enabled: r.checked,
+        }));
+        try {
+            const data = await apiPost(API.networksSelected, { networks: selected });
+            if (data.success) toast('success', 'Auswahl gespeichert');
+            else toast('error', data.error || 'Speichern fehlgeschlagen');
+        } catch (e) {
+            toast('error', 'Speichern fehlgeschlagen');
+        }
+    }
+
+    // ---------- ignore list ----------
+    async function loadIgnoreList() {
+        try {
+            const data = await apiGet(API.ignoreList);
+            const list = $('ignore-list');
+            const groups = data.ignore_list || {};
+            const flat = [];
+            for (const [cat, items] of Object.entries(groups)) {
+                (items || []).forEach((it, idx) => flat.push({ category: cat, index: idx, item: it }));
+            }
+            if (!flat.length) {
+                list.innerHTML = '<p class="empty">Keine Ausnahmen.</p>';
+                return;
+            }
+            list.innerHTML = flat.map(({ category, index, item }) => {
+                const id = item.rule_id || item.cve_id || item.check || (item.host && item.port ? item.host + ':' + item.port : '') || item.description || '';
+                return '<div class="ignore-row">'
+                    + '<span class="mono">[' + escapeHtml(category) + '] ' + escapeHtml(id) + '</span>'
+                    + '<span class="reason">' + escapeHtml(item.reason || '') + '</span>'
+                    + '<button class="btn ghost sm" data-ignore-remove="' + escapeHtml(category + ':' + index) + '">x</button>'
+                    + '</div>';
+            }).join('');
+        } catch (e) { /* ignore */ }
+    }
+    async function removeIgnore(token) {
+        const [category, idxStr] = (token || '').split(':');
+        const index = parseInt(idxStr, 10);
+        if (!category || isNaN(index)) return;
+        try {
+            const data = await apiPost(API.ignoreRemove, { category, index });
+            if (data.success) { toast('success', 'Ausnahme entfernt'); loadIgnoreList(); }
+            else toast('error', data.error || 'Entfernen fehlgeschlagen');
+        } catch (e) {
+            toast('error', 'Entfernen fehlgeschlagen');
+        }
+    }
+
+    // ---------- history ----------
+    async function loadHistory() {
+        try {
+            const data = await apiGet(API.history);
+            if (!data.success) return;
+            const hist = data.history || [];
+            const sec = $('scan-history-section');
+            if (hist.length < 2) { sec.classList.add('hidden'); return; }
+            sec.classList.remove('hidden');
+            const max = Math.max(...hist.map((h) => h.score || 0), 100);
+            $('history-chart').innerHTML = hist.map((h) => {
+                const cls = h.critical > 0 ? 'crit' : (h.high > 0 ? 'warn' : 'ok');
+                const height = Math.max(4, ((h.score || 0) / max) * 100);
+                return '<div class="hist-bar ' + cls + '" style="height:' + height + '%" title="' + escapeHtml(h.timestamp || '') + ' - Score ' + (h.score || 0) + '"></div>';
+            }).join('');
+            $('history-table').innerHTML = hist.slice().reverse().slice(0, 30).map((h) =>
+                '<div class="history-row">'
+                + '<span class="ts">' + escapeHtml(fmtTime(h.timestamp)) + '</span>'
+                + '<span>' + (h.score || 0) + '</span>'
+                + '<span>' + (h.total_findings || 0) + '</span>'
+                + '</div>'
+            ).join('');
+        } catch (e) { /* ignore */ }
+    }
+    async function clearHistory() {
+        if (!confirm('Alle Reports unwiderruflich loeschen?')) return;
+        try {
+            const data = await apiPost(API.clearHistory);
+            if (data.success) {
+                toast('success', (data.deleted || 0) + ' Reports geloescht');
+                loadResults(); loadHistory();
+            }
+        } catch (e) {
+            toast('error', 'Loeschen fehlgeschlagen');
+        }
+    }
+
+    // ---------- schedule ----------
+    async function loadSchedule() {
+        try {
+            const data = await apiGet(API.schedule);
+            if (!data.success) return;
+            const s = data.schedule || {};
+            $('schedule-enabled').checked = !!s.enabled;
+            $('schedule-interval').value = String(s.interval_hours || 24);
+            $('schedule-next-run').textContent = s.next_run ? fmtTime(s.next_run) : 'nicht geplant';
+        } catch (e) { /* ignore */ }
+    }
+    async function saveSchedule() {
+        const body = {
+            enabled: $('schedule-enabled').checked,
+            interval_hours: parseInt($('schedule-interval').value, 10) || 24,
+        };
+        try {
+            const data = await apiPost(API.schedule, body);
+            if (data.success) { toast('success', 'Schedule gespeichert'); loadSchedule(); }
+            else toast('error', data.error || 'Speichern fehlgeschlagen');
+        } catch (e) {
+            toast('error', 'Speichern fehlgeschlagen');
+        }
+    }
+
+    // ---------- modal ----------
+    function openModal(findingId) {
+        const f = state.findingsById.get(findingId);
+        if (!f) return;
+        $('modal-title').textContent = f.issue || f.title || f.check || 'Finding';
+        const sev = severityKey(f.severity);
+        const sections = [];
+        if (f.opnsense_path) {
+            sections.push(section('Pfad', '<span class="path-tag">' + escapeHtml(f.opnsense_path) + '</span>'));
+        }
+        if (f.current_value || f.recommended_value) {
+            sections.push(section('Vergleich',
+                '<div class="compare-grid">'
+                + '<div class="compare-cell bad"><div class="label">aktuell</div><div class="value">' + escapeHtml(f.current_value || '') + '</div></div>'
+                + '<div class="compare-cell good"><div class="label">empfohlen</div><div class="value">' + escapeHtml(f.recommended_value || '') + '</div></div>'
+                + '</div>'));
+        }
+        if (f.reason || f.description) {
+            sections.push(section('Grund', '<p>' + escapeHtml(f.reason || f.description) + '</p>'));
+        }
+        if (f.solution) {
+            sections.push(section('Loesung', '<p>' + escapeHtml(f.solution) + '</p>'));
+        }
+        const steps = (f.implementation_steps || []).filter((s) => s);
+        if (steps.length) {
+            sections.push(section('Schritte', '<ol>' + steps.map((s) => '<li>' + escapeHtml(s) + '</li>').join('') + '</ol>'));
+        }
+        const details = f.details || f.rule_details || null;
+        if (details) {
+            sections.push(section('Details', '<pre>' + escapeHtml(JSON.stringify(details, null, 2)) + '</pre>'));
+        }
+        if (f.suggested_rule) {
+            sections.push(section('Vorschlag (Regel anlegen)',
+                '<pre>' + escapeHtml(JSON.stringify(f.suggested_rule, null, 2)) + '</pre>'
+                + '<button class="btn primary sm" id="apply-suggestion-btn">Regel uebernehmen</button>'
+                + '<div class="status-line" id="apply-suggestion-status"></div>'));
+        }
+        $('modal-body').innerHTML = '<div class="row-flex"><span class="sev-tag sev-' + sev + '">' + escapeHtml(sev) + '</span><span class="spacer"></span></div>' + sections.join('');
+        $('finding-modal').classList.remove('hidden');
+        $('finding-modal').dataset.findingId = (f.rule_id || f.check || f.cve_id || '');
+    }
+    function section(title, html) {
+        return '<div class="modal-section"><h4>' + escapeHtml(title) + '</h4>' + html + '</div>';
+    }
+    function closeModal() {
+        $('finding-modal').classList.add('hidden');
+        $('finding-modal').dataset.findingId = '';
     }
 
     async function applySuggestion(findingId) {
-        const status = document.getElementById('apply-suggestion-status');
-        if (!findingId) {
-            if (status) status.textContent = 'kein finding_id';
-            return;
-        }
-        if (!confirm('Regel jetzt auf der OPNsense erstellen und Apply ausloesen?')) return;
-        if (status) status.textContent = 'sende...';
+        const status = $('apply-suggestion-status');
+        const btn = $('apply-suggestion-btn');
+        if (!status || !btn) return;
+        btn.disabled = true;
+        status.textContent = 'Sende...';
         try {
-            const res = await fetch('/api/suggestions/apply', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({finding_id: findingId, confirm: true})
-            });
-            const data = await res.json();
-            if (data.success) {
-                if (status) status.textContent = 'angewendet, uuid=' + (data.add_result && data.add_result.uuid);
-            } else {
-                if (status) status.textContent = 'Fehler: ' + (data.error || 'unbekannt');
-            }
+            const data = await apiPost(API.suggestionApply, { finding_id: findingId, confirm: true });
+            if (data.success) status.textContent = 'OK ' + (data.uuid || '');
+            else status.textContent = 'Fehler: ' + (data.error || 'unbekannt');
         } catch (e) {
-            if (status) status.textContent = 'Fehler: ' + e.message;
+            status.textContent = 'Fehler beim Anwenden';
+        } finally {
+            btn.disabled = false;
         }
     }
 
-    function closeModal() {
-        document.getElementById('finding-modal').classList.add('hidden');
-    }
-
-    // Firewall View
-    function renderFirewallView(results) {
-        const fwFindings = results.firewall_findings || [];
-        const stats = results.statistics || {};
-
-        document.getElementById('fw-total-rules').textContent = stats.firewall_rules || '--';
-        document.getElementById('fw-problem-rules').textContent = fwFindings.length;
-        
-        const anyRules = fwFindings.filter(f => 
-            f.issue?.toLowerCase().includes('any-to-any') || 
-            f.check?.includes('any_to_any')
-        ).length;
-        document.getElementById('fw-any-rules').textContent = anyRules;
-
-        const container = document.getElementById('fw-rules-list');
-        if (fwFindings.length === 0) {
-            container.innerHTML = `
-                <div class="no-data">
-                    <i class="fas fa-check-circle"></i>
-                    <p>Keine Firewall-Probleme gefunden</p>
-                </div>
-            `;
-        } else {
-            const sorted = sortBySeverity(fwFindings);
-            container.innerHTML = sorted.map((f, i) => renderFindingItem(f, 'fw_' + i)).join('');
-            attachFindingListeners(container);
-        }
-    }
-
-    // DNS View
-    function renderDnsView(results) {
-        const dnsConfig = results.dns_config || {};
-        const unbound = dnsConfig.unbound || {};
-
-        const setStatus = (id, enabled) => {
-            const el = document.getElementById(id);
-            el.textContent = enabled ? 'Aktiviert' : 'Deaktiviert';
-            el.className = 'status-value ' + (enabled ? 'enabled' : 'disabled');
-        };
-
-        setStatus('dns-dnssec', unbound.dnssec === '1' || unbound.dnssec === true);
-        setStatus('dns-dot', unbound.dot === '1' || unbound.dot === true);
-        setStatus('dns-rebind', unbound.private_domain === '1' || unbound.private_domain === true);
-
-        // DNS Servers
-        const servers = [
-            ...(dnsConfig.system_dns || []),
-            ...(dnsConfig.forward_servers || []).map(s => s.ip)
-        ].filter(Boolean);
-
-        const serverList = document.querySelector('#dns-servers-list .server-list');
-        if (servers.length > 0) {
-            serverList.innerHTML = servers.map(s => `
-                <div class="status-card" style="margin-bottom:8px">
-                    <div class="status-icon"><i class="fas fa-server"></i></div>
-                    <div class="status-info">
-                        <span class="status-value" style="font-family:var(--font-mono)">${escapeHtml(s)}</span>
-                    </div>
-                </div>
-            `).join('');
-        }
-    }
-
-    // System View
-    function renderSystemView(results) {
-        const sysFindings = results.system_findings || [];
-        const container = document.getElementById('system-checks');
-
-        if (sysFindings.length === 0) {
-            container.innerHTML = `
-                <div class="no-data" style="grid-column: 1/-1">
-                    <i class="fas fa-check-circle"></i>
-                    <p>Alle System-Checks bestanden</p>
-                </div>
-            `;
-        } else {
-            window._sysFindings = sysFindings;
-            container.innerHTML = sysFindings.map((f, i) => `
-                <div class="status-card" style="cursor:pointer" data-sys-index="${i}">
-                    <div class="status-icon" style="background:${getSeverityBg(f.severity)};color:${getSeverityColor(f.severity)}">
-                        <i class="fas fa-exclamation-triangle"></i>
-                    </div>
-                    <div class="status-info">
-                        <span class="status-label">${escapeHtml(f.category || 'System')}</span>
-                        <span class="status-value">${escapeHtml(f.issue || f.check)}</span>
-                    </div>
-                </div>
-            `).join('');
-            container.querySelectorAll('[data-sys-index]').forEach(card => {
-                card.addEventListener('click', () => {
-                    const idx = parseInt(card.dataset.sysIndex, 10);
-                    if (window._sysFindings[idx]) showFindingDetail(window._sysFindings[idx]);
-                });
-            });
-        }
-    }
-
-    function getSeverityColor(sev) {
-        const colors = { critical: '#ff6b6b', high: '#ffa94d', medium: '#ffd43b', low: '#69db7c' };
-        return colors[(sev || '').toLowerCase()] || '#69db7c';
-    }
-
-    function getSeverityBg(sev) {
-        const bgs = { 
-            critical: 'rgba(255,107,107,0.1)', 
-            high: 'rgba(255,169,77,0.1)', 
-            medium: 'rgba(255,212,59,0.1)', 
-            low: 'rgba(105,219,124,0.1)' 
-        };
-        return bgs[(sev || '').toLowerCase()] || 'rgba(105,219,124,0.1)';
-    }
-
-    // Filters
-    function applyFilters() {
-        if (!state.results) return;
-
-        const severity = document.getElementById('filter-severity').value;
-        const category = document.getElementById('filter-category').value;
-        const search = document.getElementById('filter-search').value.toLowerCase();
-
-        let findings = sortBySeverity(getAllFindings(state.results));
-
-        if (severity !== 'all') {
-            findings = findings.filter(f => (f.severity || '').toLowerCase() === severity);
-        }
-        if (category !== 'all') {
-            findings = findings.filter(f => {
-                const cat = getCategory(f).toLowerCase();
-                return cat.includes(category);
-            });
-        }
-        if (search) {
-            findings = findings.filter(f => 
-                (f.issue || '').toLowerCase().includes(search) ||
-                (f.reason || '').toLowerCase().includes(search) ||
-                (f.solution || '').toLowerCase().includes(search)
-            );
-        }
-
-        const container = document.getElementById('all-findings-list');
-        if (findings.length === 0) {
-            container.innerHTML = `
-                <div class="no-data">
-                    <i class="fas fa-search"></i>
-                    <p>Keine Ergebnisse für Filter</p>
-                </div>
-            `;
-        } else {
-            container.innerHTML = findings.map((f, i) => renderFindingItem(f, 'filter_' + i)).join('');
-            attachFindingListeners(container);
-        }
-    }
-
-    // Utilities
-    function escapeHtml(str) {
-        if (!str) return '';
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
-
-    function formatTimestamp(ts) {
-        if (!ts) return '--';
+    async function excludeCurrent() {
+        const id = $('finding-modal').dataset.findingId;
+        if (!id) return;
+        const f = state.findingsById.get(id);
+        if (!f) return;
+        const reason = prompt('Grund fuer Ausnahme (optional):') || '';
         try {
-            const date = new Date(ts);
-            return date.toLocaleString('de-DE', { 
-                day: '2-digit', 
-                month: '2-digit', 
-                hour: '2-digit', 
-                minute: '2-digit' 
-            });
-        } catch {
-            return ts;
+            const data = await apiPost(API.ignoreFinding, { finding: f, reason });
+            if (data.success) { toast('success', 'Ausnahme hinzugefuegt'); closeModal(); loadResults(); }
+            else toast('error', data.error || 'Fehlgeschlagen');
+        } catch (e) {
+            toast('error', 'Fehlgeschlagen');
         }
     }
 
-    // === Report Download ===
-    async function downloadReport() {
+    function downloadReport() {
         if (!state.reportFile) return;
-        try {
-            window.open(`/api/reports/${state.reportFile}/html`, '_blank');
-        } catch (err) {
-            console.error('Download failed:', err);
-        }
+        window.open('/api/reports/' + encodeURIComponent(state.reportFile) + '/html', '_blank', 'noopener');
     }
 
-    // === Exclude Finding ===
-    async function excludeCurrentFinding() {
-        if (!state.currentFinding) return;
-        const reason = prompt('Grund f\u00fcr Ausschluss (optional):', 'Bewusst akzeptiertes Risiko');
-        if (reason === null) return; // cancelled
-        try {
-            const res = await fetch(API.ignoreFinding, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ finding: state.currentFinding, reason: reason || 'Manuell ausgeschlossen' })
-            });
-            const data = await res.json();
-            if (data.success) {
-                closeModal();
-                const badge = document.createElement('div');
-                badge.className = 'scan-log';
-                badge.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#69db7c;color:#1a1a2e;padding:12px 20px;border-radius:8px;z-index:10000;font-weight:600';
-                badge.textContent = '\u2713 Finding ausgeschlossen';
-                document.body.appendChild(badge);
-                setTimeout(() => badge.remove(), 3000);
-            } else {
-                alert('Fehler: ' + (data.error || 'Unbekannt'));
-            }
-        } catch (err) {
-            alert('Fehler: ' + err.message);
-        }
-    }
-
-    // === Scan History ===
-    async function loadScanHistory() {
-        try {
-            const res = await fetch(API.history);
-            const data = await res.json();
-            if (data.success && data.history && data.history.length >= 2) {
-                renderScanHistory(data.history);
-            }
-        } catch (err) {
-            console.error('Load history failed:', err);
-        }
-    }
-
-    function renderScanHistory(history) {
-        const section = document.getElementById('scan-history-section');
-        if (!section) return;
-        section.style.display = '';
-
-        // Render visual bar chart
-        const chartEl = document.getElementById('history-chart');
-        const maxScore = 100;
-        const barWidth = Math.max(30, Math.min(60, Math.floor(600 / history.length)));
-        
-        let barsHtml = history.map((h, i) => {
-            const score = h.score || 0;
-            const height = Math.max(4, (score / maxScore) * 120);
-            let color = '#ff6b6b';
-            if (score >= 80) color = '#69db7c';
-            else if (score >= 60) color = '#ffd43b';
-            else if (score >= 40) color = '#ffa94d';
-            const label = h.timestamp ? new Date(h.timestamp).toLocaleDateString('de-DE', {day:'2-digit',month:'2-digit'}) : `#${i+1}`;
-            return `
-                <div class="history-bar-col" style="text-align:center;flex:0 0 ${barWidth}px">
-                    <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">${score}</div>
-                    <div style="height:${height}px;background:${color};border-radius:4px 4px 0 0;margin:0 4px;transition:height 0.3s"></div>
-                    <div style="font-size:10px;color:var(--text-muted);margin-top:4px">${label}</div>
-                </div>
-            `;
-        }).join('');
-
-        chartEl.innerHTML = `
-            <div style="display:flex;align-items:flex-end;justify-content:center;min-height:160px;padding:10px 0">
-                ${barsHtml}
-            </div>
-        `;
-
-        // Render table
-        const tableEl = document.getElementById('history-table');
-        tableEl.innerHTML = `
-            <table class="devices-table" style="margin-top:12px">
-                <thead><tr>
-                    <th>Datum</th><th>Score</th><th>Grade</th>
-                    <th>Critical</th><th>High</th><th>Medium</th><th>Low</th>
-                    <th>Gesamt</th>
-                </tr></thead>
-                <tbody>
-                    ${history.slice().reverse().map(h => `
-                        <tr>
-                            <td>${h.timestamp ? new Date(h.timestamp).toLocaleString('de-DE', {day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}) : '--'}</td>
-                            <td><strong>${h.score || 0}</strong></td>
-                            <td><span class="finding-badge ${(h.grade||'F').toLowerCase() <= 'b' ? 'low' : (h.grade||'F') <= 'D' ? 'medium' : 'critical'}" style="font-size:11px">${h.grade || 'F'}</span></td>
-                            <td>${h.critical || 0}</td>
-                            <td>${h.high || 0}</td>
-                            <td>${h.medium || 0}</td>
-                            <td>${h.low || 0}</td>
-                            <td>${h.total_findings || 0}</td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        `;
-    }
-
-    // === Network Devices ===
-    function flattenNetworkMap(networkMap) {
-        // network_map format: { "192.168.1.0/24": { "VLAN10": [ {ip, hostname, mac, ...} ] } }
-        const devices = [];
-        if (!networkMap || typeof networkMap !== 'object') return devices;
-        for (const [network, vlans] of Object.entries(networkMap)) {
-            if (typeof vlans !== 'object') continue;
-            for (const [vlan, devList] of Object.entries(vlans)) {
-                if (!Array.isArray(devList)) continue;
-                devList.forEach(d => {
-                    devices.push({ ...d, network: network, vlan: vlan || '' });
-                });
-            }
-        }
-        return devices;
-    }
-
-    function renderNetworkDevices(results) {
-        // Prefer flat devices array, fall back to flattening network_map
-        let devices = results.devices || [];
-        if (devices.length === 0 && results.network_map) {
-            devices = flattenNetworkMap(results.network_map);
-        }
-        const tbody = document.getElementById('devices-tbody');
-        if (!tbody) return;
-
-        // Update stats
-        const totalDevices = devices.length;
-        const totalPorts = devices.reduce((sum, d) => sum + (d.open_ports ? (Array.isArray(d.open_ports) ? d.open_ports.length : d.open_ports) : 0), 0);
-        const networks = new Set(devices.map(d => d.network).filter(Boolean));
-        
-        document.getElementById('stat-total-devices').textContent = totalDevices || '--';
-        document.getElementById('stat-total-open-ports').textContent = totalPorts || '--';
-        document.getElementById('stat-total-networks').textContent = networks.size || '--';
-
-        if (devices.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="no-data-cell">Keine Ger\u00e4te gefunden. Starte einen Netzwerk-Scan.</td></tr>';
-            return;
-        }
-
-        // Sort by IP
-        const sorted = [...devices].sort((a, b) => {
-            const ipA = (a.ip || '').split('.').map(n => parseInt(n) || 0);
-            const ipB = (b.ip || '').split('.').map(n => parseInt(n) || 0);
-            for (let i = 0; i < 4; i++) { if (ipA[i] !== ipB[i]) return ipA[i] - ipB[i]; }
-            return 0;
+    // ---------- event delegation ----------
+    function bindEvents() {
+        document.addEventListener('click', (e) => {
+            const fid = e.target.closest('[data-finding-id]');
+            if (fid) { openModal(fid.dataset.findingId); return; }
+            const remove = e.target.closest('[data-ignore-remove]');
+            if (remove) { removeIgnore(remove.dataset.ignoreRemove); return; }
         });
 
-        window._allDevices = sorted;
-        tbody.innerHTML = sorted.map(d => renderDeviceRow(d)).join('');
-    }
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeModal();
+        });
 
-    function renderDeviceRow(d) {
-        const ports = Array.isArray(d.open_ports) ? d.open_ports : [];
-        const portStr = ports.length > 0 
-            ? ports.slice(0, 8).map(p => `<span class="port-tag">${p}</span>`).join('') + (ports.length > 8 ? ` <span class="port-tag">+${ports.length-8}</span>` : '')
-            : '<span style="color:var(--text-muted)">keine</span>';
-        const statusDot = d.status === 'active' ? 'online' : 'offline';
-        return `
-            <tr class="device-row">
-                <td><span class="status-dot ${statusDot}"></span></td>
-                <td style="font-family:var(--font-mono)">${escapeHtml(d.ip || '')}</td>
-                <td>${escapeHtml(d.hostname || '--')}</td>
-                <td style="font-family:var(--font-mono);font-size:12px">${escapeHtml(d.mac || '--')}</td>
-                <td>${escapeHtml(d.network || '--')}</td>
-                <td>${portStr}</td>
-            </tr>
-        `;
-    }
+        $('modal-close').addEventListener('click', closeModal);
+        document.querySelector('#finding-modal .modal-backdrop').addEventListener('click', closeModal);
 
-    function filterDevices() {
-        const search = (document.getElementById('device-search')?.value || '').toLowerCase();
-        const tbody = document.getElementById('devices-tbody');
-        if (!window._allDevices || !tbody) return;
-
-        const filtered = search 
-            ? window._allDevices.filter(d => 
-                (d.ip || '').toLowerCase().includes(search) ||
-                (d.hostname || '').toLowerCase().includes(search) ||
-                (d.mac || '').toLowerCase().includes(search) ||
-                (d.network || '').toLowerCase().includes(search)
-            )
-            : window._allDevices;
-
-        tbody.innerHTML = filtered.length > 0 
-            ? filtered.map(d => renderDeviceRow(d)).join('')
-            : '<tr><td colspan="6" class="no-data-cell">Keine Ger\u00e4te f\u00fcr Suche gefunden</td></tr>';
-    }
-
-    // === Notifications ===
-    function showNotification(title, message, type = 'info') {
-        // Remove existing notification
-        const existing = document.querySelector('.toast-notification');
-        if (existing) existing.remove();
-
-        const toast = document.createElement('div');
-        toast.className = `toast-notification toast-${type}`;
-        const icon = type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle';
-        toast.innerHTML = `
-            <div class="toast-icon"><i class="fas fa-${icon}"></i></div>
-            <div class="toast-content">
-                <div class="toast-title">${escapeHtml(title)}</div>
-                <div class="toast-message">${escapeHtml(message)}</div>
-            </div>
-            <button class="toast-close" onclick="this.parentElement.remove()"><i class="fas fa-times"></i></button>
-        `;
-        document.body.appendChild(toast);
-        // Trigger animation
-        requestAnimationFrame(() => toast.classList.add('show'));
-        setTimeout(() => { if (toast.parentElement) toast.remove(); }, 6000);
-    }
-
-    // === Clear History ===
-    async function clearHistory() {
-        if (!confirm('Alle Scan-Reports wirklich löschen? Dies kann nicht rückgängig gemacht werden.')) return;
-        try {
-            const res = await fetch(API.clearHistory, { method: 'POST' });
-            const data = await res.json();
-            if (data.success) {
-                showNotification('Verlauf gelöscht', data.message, 'success');
-                loadLatestResults();
-                loadScanHistory();
-            } else {
-                showNotification('Fehler', data.error || 'Löschen fehlgeschlagen', 'error');
+        // Apply suggestion is bound via delegation since the button is dynamic.
+        document.addEventListener('click', (e) => {
+            if (e.target && e.target.id === 'apply-suggestion-btn') {
+                const id = $('finding-modal').dataset.findingId;
+                applySuggestion(id);
             }
-        } catch (err) {
-            console.error('Clear history failed:', err);
-        }
+        });
+
+        $('btn-start-scan').addEventListener('click', startScan);
+        $('btn-cancel-scan').addEventListener('click', cancelScan);
+        $('btn-refresh').addEventListener('click', () => { loadResults(); loadHistory(); });
+        $('btn-download-report').addEventListener('click', downloadReport);
+        $('btn-test-connection').addEventListener('click', testConnection);
+        $('btn-save-config').addEventListener('click', saveConfig);
+        $('btn-save-schedule').addEventListener('click', saveSchedule);
+        $('btn-clear-history').addEventListener('click', clearHistory);
+        $('btn-network-scan').addEventListener('click', startInternalScan);
+        $('btn-network-scan-cancel').addEventListener('click', cancelInternalScan);
+        $('btn-fetch-networks').addEventListener('click', fetchNetworks);
+        $('btn-save-networks').addEventListener('click', saveNetworks);
+        $('btn-exclude-finding').addEventListener('click', excludeCurrent);
+        $('filter-severity').addEventListener('change', applyFilter);
+        $('filter-category').addEventListener('change', applyFilter);
+        $('filter-search').addEventListener('input', applyFilter);
+        $('device-search').addEventListener('input', () => renderDevices(state.devices));
     }
 
-    // === Schedule ===
-    async function loadSchedule() {
-        try {
-            const res = await fetch(API.schedule);
-            const data = await res.json();
-            if (data.success && data.schedule) {
-                const s = data.schedule;
-                const toggle = document.getElementById('schedule-enabled');
-                const interval = document.getElementById('schedule-interval');
-                const nextRun = document.getElementById('schedule-next-run');
-                if (toggle) toggle.checked = s.enabled || false;
-                if (interval) interval.value = s.interval_hours || 24;
-                if (nextRun) {
-                    nextRun.textContent = s.enabled && s.next_run 
-                        ? new Date(s.next_run).toLocaleString('de-DE') 
-                        : 'Nicht geplant';
-                }
+    function init() {
+        bindNav();
+        bindEvents();
+        loadConfig();
+        loadResults();
+        loadHistory();
+        loadSchedule();
+        // If a scan is running on the server, attach polling.
+        apiGet(API.scanStatus).then((d) => {
+            if (d && d.success && (d.status === 'running' || d.status === 'cancelling')) {
+                state.scanRunning = true;
+                state.scanStarted = Date.now();
+                showScanPanel();
+                startScanPolling();
             }
-        } catch (err) {
-            console.error('Load schedule failed:', err);
-        }
+        }).catch(() => {});
     }
 
-    async function saveSchedule() {
-        const toggle = document.getElementById('schedule-enabled');
-        const interval = document.getElementById('schedule-interval');
-        if (!toggle || !interval) return;
-
-        try {
-            const res = await fetch(API.schedule, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    enabled: toggle.checked,
-                    interval_hours: parseInt(interval.value) || 24
-                })
-            });
-            const data = await res.json();
-            if (data.success) {
-                showNotification('Schedule gespeichert', data.message, 'success');
-                loadSchedule();
-            } else {
-                showNotification('Fehler', data.error, 'error');
-            }
-        } catch (err) {
-            console.error('Save schedule failed:', err);
-        }
-    }
-
-    // Expose for inline handlers
-    window.showFindingDetail = showFindingDetail;
-
+    document.addEventListener('DOMContentLoaded', init);
 })();

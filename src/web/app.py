@@ -1818,33 +1818,34 @@ def get_internal_scan_status():
 
 @app.route('/api/connection/test', methods=['POST'])
 def test_connection():
-    """Test OPNsense API connection"""
+    """Test OPNsense API connection. Uses posted credentials if any, falls back to saved."""
     try:
-        data = request.json
-        host = data.get('host', '')
-        api_key = data.get('api_key', '')
-        api_secret = data.get('api_secret', '')
+        data = request.get_json(silent=True) or {}
+        host = (data.get('host') or '').strip()
+        api_key = data.get('api_key') or ''
+        api_secret = data.get('api_secret') or ''
+        insecure_tls = bool(data.get('insecure_tls', False))
 
-        if not all([host, api_key, api_secret]):
-            return jsonify({'success': False, 'error': 'Alle Felder müssen ausgefüllt sein'})
-
-        client = _opnsense_client_from_config()
-        if client is None:
-            return jsonify({'success': False, 'error': 'OPNsense credentials not configured'}), 400
+        if host and api_key and api_secret:
+            client = OPNsenseClient(
+                host=host,
+                api_key=api_key,
+                api_secret=api_secret,
+                verify_ssl=not insecure_tls,
+            )
+        else:
+            client = _opnsense_client_from_config()
+            if client is None:
+                return jsonify({'success': False, 'error': 'Keine Zugangsdaten vorhanden'}), 400
 
         if client.test_connection():
-            # Get version info
             sys_info = client.get_system_info()
             version = sys_info.get('product_version', sys_info.get('version', ''))
-            return jsonify({
-                'success': True,
-                'version': version,
-                'message': 'Verbindung erfolgreich'
-            })
-        else:
-            return jsonify({'success': False, 'error': 'Verbindung fehlgeschlagen'})
+            return jsonify({'success': True, 'version': version})
+        return jsonify({'success': False, 'error': 'Verbindung fehlgeschlagen'})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        logger.error(f"connection/test failed: {e}")
+        return jsonify({'success': False, 'error': 'Verbindung fehlgeschlagen'}), 500
 
 
 @app.route('/api/results/latest', methods=['GET'])

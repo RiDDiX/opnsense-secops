@@ -1,11 +1,8 @@
-"""
-Port Scanner
-Scans for open ports and identifies critical services
-"""
+"""Port scanner for WAN exposed services."""
 import ipaddress
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import nmap
 
@@ -14,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PortFinding:
-    """Represents a port security finding"""
     severity: str
     host: str
     port: int
@@ -23,7 +19,12 @@ class PortFinding:
     reason: str
     solution: str
     state: str = "open"
-    details: dict = None
+    details: dict = field(default_factory=dict)
+    rule_id: str = ""
+    rule_description: str = ""
+    opnsense_path: str = "Firewall > NAT > Port Forward"
+    interface: str = "WAN"
+    implementation_steps: list[str] = field(default_factory=list)
 
 
 class PortScanner:
